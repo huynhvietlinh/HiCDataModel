@@ -1,9 +1,9 @@
 # FusionScore
-# Compile the code
+1. Compile the code
 ./compile
-# You need to modify the file exp.sh to change the path to data files
-########### Hi-C data
-########### Deletion mutation
-########### CTCF binding site
-# Finally, you can run the code
+2. Modify the file exp.sh to change the path to data files
+	(a) Hi-C data
+	(b) Deletion mutation
+	(c) CTCF binding site
+3. Run the code
 ./exp
