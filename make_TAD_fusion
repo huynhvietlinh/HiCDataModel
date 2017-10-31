@@ -1,0 +1,11 @@
+CPP=g++
+#CPP_FLAGS= -std=c++11 -static -O0 -c -m64 -I /share/hormozdiarilab/Tools/CPLEX/ibm/ILOG/CPLEX_Studio1263/cplex/include/ -mcmodel=medium
+#CPP_FLAGS_Link= -std=c++11 -static -O0 -m64 -I /share/hormozdiarilab/Tools/CPLEX/ibm/ILOG/CPLEX_Studio1263/cplex/include/ -L /share/hormozdiarilab/Tools/CPLEX/ibm/ILOG/CPLEX_Studio1263/cplex/lib/x86-64_linux/static_pic/ -lcplex -lm -lpthread -mcmodel=medium
+
+CPP_FLAGS= -w -std=c++11 -c -m64 -I /share/hormozdiarilab/Tools/CPLEX/ibm/ILOG/CPLEX_Studio1263/cplex/include/ -mcmodel=medium
+CPP_FLAGS_Link= -std=c++11 -m64 -I /share/hormozdiarilab/Tools/CPLEX/ibm/ILOG/CPLEX_Studio1263/cplex/include/ -L /share/hormozdiarilab/Tools/CPLEX/ibm/ILOG/CPLEX_Studio1263/cplex/lib/x86-64_linux/static_pic/ -lcplex -lm -lpthread -mcmodel=medium
+
+TAD_fusion: TAD_fusion.o
+	$(CPP) -o TAD_fusion TAD_fusion.o $(CPP_FLAGS_Link)
+TAD_fusion.o: TAD_fusion.cpp
+	$(CPP) $(CPP_FLAGS) TAD_fusion.cpp
