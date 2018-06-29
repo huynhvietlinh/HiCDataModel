@@ -4,6 +4,7 @@
 
 #include <ilcplex/cplex.h>
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -12,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 using namespace std;
 
@@ -20,229 +22,1735 @@ typedef vector<double> ValueList;
 typedef vector<IdList> IdMatrix;
 typedef vector<ValueList> ValueMatrix; 
 typedef vector<string> StringList;
+typedef vector<StringList> StringMatrix;
 
 typedef map<string,int> IdMap;
 
-#define STR_EQ 0
-#define ROW_DELIM '\n'
-#define FIELD_DELIM '\t'
-#define COMMA_DELIM ','
+#define STR_EQ 		0
+#define ROW_DELIM 	'\n'
+#define FIELD_DELIM 	'\t'
+#define COMMA_DELIM 	','
 
-#define CHR_NUM			23
-#define RESOLUTION		5000
+#define CHR_NUM				23
+#define RESOLUTION			5000
 
-#define ZERO_ENTRY		1e-1
+#define ZERO				1e-1
 
-#define ARROW_HEAD		1
-#define CATCH			2
-#define HICSEG			3
-#define INSULATION_SCORE	4
-#define ARMATUS			5
+#define ARROW_HEAD			1
+#define CATCH				2
+#define HICSEG				3
+#define INSULATION_SCORE		4
+#define ARMATUS				5
 
-#define FLOYD_SHORTEST_PATH	1
-#define APPROX_SHORTEST_PATH	0
+#define DELETION_FILE			0
+#define DELETION_1KG_FILE 		1
+#define CTCF_FILE			2
+#define RAO_LOOP_FILE			3
+#define JUICE_FILE			4
+#define INSULATION_SCORE_FILE 		5
+#define TAD_FUSION_SCORE_FILE		6
 
 #define MAX_LENGTH_OBJ			100
-#define SHORTEST_PATH_WINDOW_SIZE	50
+#define FUSION_SCORE_WINDOW_SIZE	50
 
-struct Distribution {
-	void add_value (double x) {
-		val_list.push_back(x);
-		if (val_list.size() == 1)
-			min_val = max_val = x;
-		else {
-			if (x < min_val)
-				min_val = x;
-			if (x > max_val)
-				max_val = x;
-		}
-	}
-	void add_a_value_list (const ValueList& val_list) {
-		for (int i = 0; i < val_list.size(); i++)
-			add_value(val_list[i]);
-	}
-	void make_dist (int bin_num) {
-		freq.resize(bin_num);
-		for (int i = 0; i < bin_num; i++)
-			freq[i] = 0;
-		if (val_list.empty()) {
-			cout << "Error: Make distribution from an empty list!" << endl;
-			return;
-		}
-		if (max_val == min_val) {
-			mean = min_val;
-			std = 0;
-			return;
-		}
-		mean = 0;
-		for (int i = 0; i < val_list.size(); i++) {
-			int l = floor((val_list[i] - min_val)*bin_num/(max_val - min_val));
-			if (l == bin_num)
-				l--;
-			freq[l] += 1.0/val_list.size();
-			mean += val_list[i]/val_list.size();
-		}
-		std = 0;
-		for (int i = 0; i < val_list.size(); i++) 
-			std += (val_list[i] - mean)*(val_list[i] - mean);
-		std = sqrt(std/val_list.size());
-		//val_list.clear();
-	}
-	double get_prob (double x) const {
-		double prob = 0;
-		if (x >= min_val || x <= max_val) {
-			if (min_val == max_val) {
-				cout << "Warning: Distribution has only one value!" << min_val << endl;
-				return 1;
-			}
-			int l =  floor((x - min_val)*freq.size()/(max_val - min_val));
-			if (l == freq.size())
-				l--;
-			return freq[l];
-		}
-		return prob;
-	}
-	double get_cdf (double x) const {
-		double count = 0;
-		for (int i = 0; i < val_list.size(); i++)
-			if (val_list[i] <= x)
-				count++;
-		return ((count > 0)? count/val_list.size(): 0);
-	}
-	void print (string filename) {
-		ofstream out_file(filename.c_str());
-		out_file << min_val - 0.5*(max_val - min_val)/freq.size() << "\t" << 0 << endl;
-		for (int i = 0; i < freq.size(); i++)
-			out_file << min_val + (0.5 + i)*(max_val - min_val)/freq.size() << "\t" << freq[i]*100 << endl;
-		out_file << max_val + 0.5*(max_val - min_val)/freq.size() << "\t" << 0 << endl;
-		out_file.close();
-	}
-	double min_val, max_val, mean, std;
-	ValueList freq, val_list;
+#define INSULATION_SCORE_THRESHOLD	0.7
+
+struct ExplicitDistribution {
+	ExplicitDistribution();	
+	void add_value (int);
+	double get_prob (int) const;
+	void read_from_file (string);
+	void print_to_file (string) const;
+ 	
+	ValueList freq;
+	double n = 0;
 };
-
-struct DistributionList {
-	void reset (int max_length) {
-		dist_list.resize(max_length + 1);
-	}
-	void add_value (int length, double x) {
-		if (length >= dist_list.size())
-			cout << "Error: length = " << length << " while max length = " << dist_list.size() - 1 << endl;
-		else
-			dist_list[length].add_value(x);
-	}
-	void make_dist(int bin_num) {
-		for (int i = 0; i < dist_list.size(); i++) {
-			dist_list[i].make_dist(bin_num);
-		}
-	}
-
-	double get_prob (int length, double x) const {
-		double prob = 0;
-		if (length >= dist_list.size()) 
-			cout << "Error: length = " << length << " while max length = " << dist_list.size() - 1 << endl;
-		else 
-			prob = dist_list[length].get_prob(x);
-		return prob;
-	}
-	vector<Distribution> dist_list;
-};
-
-typedef vector<vector<Distribution> > DistributionMatrix;
 
 struct DistributionSummary {
-	DistributionSummary() {
-		size = 0;
-		mean = std = 0;
-	}
-	void add_value (double x) {
-		double new_mean = (size*mean + x)/(size + 1);
-		double tmp = (x*x + size*(std*std + mean*mean))/(size+1) - new_mean*new_mean;
-		if (tmp > 1e-10)
-			std = sqrt(tmp);
-		else
-			std = 0;
-		mean = new_mean;
-		size++;
-	}
-	void merge (const DistributionSummary& s) {
-		int new_size = size + s.size;
-		double new_mean = (size*mean + s.size*s.mean)/new_size;
-		std = sqrt((size*(mean*mean + std*std) + s.size*(s.mean*s.mean + s.std*s.std))/new_size - new_mean*new_mean);
-		mean = new_mean;
-		size += s.size;
-	}
+	DistributionSummary();
+	void add_value (double);
+	void merge (const DistributionSummary&);
+
 	int size;
 	double mean, std;
 };
-
 typedef vector<DistributionSummary> DistributionSummaryList;
 typedef vector<DistributionSummaryList> DistributionSummaryMatrix;
 
-struct Deletion {
-	Deletion () {
-		left = right = 0;
-	}
-	Deletion (int l, int r) {
-		left = l;
-		right = r;
-	}	
+struct Sequence {
+	Sequence ();
+	Sequence (int l, int r, double s = 0);
 	int left, right;
+	ValueList score_list;
 };
-typedef vector<Deletion> DeletionList;
-typedef vector<DeletionList> DeletionMatrix;
+typedef vector<Sequence> SequenceList;
+typedef vector<SequenceList> SequenceMatrix;
 
-struct TAD {
-	TAD () {
-		left = right = 0;
-	}
-	TAD (int l, int r) {
-		left = l;
-		right = r;
-	}
-	int left, right;
+struct SequencePair {
+	Sequence src, dest;
 };
-typedef vector<TAD> TADList;
-typedef vector<TADList> TADMatrix;
-
-struct TADBoundary {
-	TADBoundary () {
-		left = right = score = -1;
-	}
-	TADBoundary (int l, int r, double s) {
-		left = l;
-		right = r;
-		score = s;
-	}
-	int left, right;
-	double score;
-};
-typedef vector<TADBoundary> TADBoundaryList;
-typedef vector<TADBoundaryList> TADBoundaryMatrix;
-
-struct DeletionInfo {
-	DeletionInfo(int c, int d) {
-		chr = c;
-		del = d;
-	};
-	DeletionInfo() {
-		chr = del = -1;
-	};
-	int chr;
-	int del;
-};
-typedef vector<DeletionInfo> DeletionInfoList;
+typedef vector<SequencePair> SequencePairList;
+typedef vector<SequencePairList> SequencePairMatrix;
+typedef vector<SequencePairList> SequencePairCube;
 
 struct HiCDataModel {
-	int get_right() const {
-		return left + alpha.size() - 1;
-	}
+	int get_right() const;
+	double get_alpha(int bin_id) const;
+
 	ValueList alpha;
 	double beta;
 	ValueList resistance;
-	int left;
+	int left;		// bin, not base-pair
 };
 typedef vector<HiCDataModel> HiCDataModelList;
+
+struct Genomic_Interaction_Distribution {
+	void load(string filename, int round_factor_);
+	double get_prob(double contact_freq) const;
+
+	int round_factor;
+	ValueList freq_distribution;
+};
+
+// Auxiliari functions
+string num_to_string (int);
+double max(double, double);
+double min(double, double);
+//
+double PCC (const ValueList&, const ValueList&, double);  		// pred, obs, zero
+double average_log_ratio (const ValueList&, const ValueList&, double);	
+double L1(const ValueList&, const ValueList&);
+double L2(const ValueList&, const ValueList&);
+void line_LQ (const ValueList&, const ValueList&, double&, double&);	//x, y, a, b: y = ax + b
+//
+void resize_and_fill(ValueList&, int, int);				// size, value
+void read_a_table_file (string filename, char row_delim_char, char field_delim_char, 
+	char comment_char, int skipping_header_line_num, 
+	const IdList& col_list, StringMatrix& str_mat);			// index of 1st col = 0
+void read_a_value_list (string filename, int col, ValueList& val_list);	// index of 1st col = 0
+void write_a_value_list (string filename, ValueList&);
+void sort_by_value (const ValueList& l, ValueList& sorted_index, ValueList& rank, bool is_asc);
+//
+void Dijkstra (const ValueMatrix& hi_c_mat, int left, int right, int src, ValueList& shortest_path_val_list);
+void Floyd_APSP (const ValueMatrix& graph_dist_mat, ValueMatrix& shortest_dist_mat);
+
+// Hi-C processing functions
+void read_sequence_list_file (string filename, int file_format, int min_length, int max_length, SequenceMatrix& seq_mat);
+int count(const SequenceMatrix&); 
+void deletion_filter (SequenceMatrix& original_del_mat, const SequenceMatrix& filter_del_mat);
+void extract_1KG_without_GM12878 (string One_KG_deletion_filename, string GM12878_variant_filename, int min_length, int max_length);
+//
+void read_hi_c_data (string filename, int resolution, ValueMatrix& hi_c_matrix);
+void read_5C_file (string filename, int header_line_num, int matrix_size,  ValueMatrix& hi_c_matrix);
+//
+void write_hi_c_data_model_list(string, const HiCDataModelList&);
+void read_hi_c_data_model_list(string, HiCDataModelList&);
+void export_hi_c_model_list (const ValueMatrix& hi_c_mat, int window_size, int shift_length, int max_length, string filename);
+void export_all_hi_c_model (int chr_min, int chr_max, int max_length_obj, int window_length, int shift_length, string model_folder); 
+// 
+void write_TAD_fusion_score_primary (const SequenceMatrix&, string filename);
+void write_TAD_fusion_score_permutation( const vector<SequenceMatrix>&, string filename);
+void read_TAD_fusion_score_permutation (string filename, const SequenceMatrix&, vector<SequenceMatrix>&);
+double find_fusion_score_sum(const SequenceMatrix& seq_mat, int score_col_index);
+
+// Hi-C main functions
+ValueList length_based_model_prediction (const ValueMatrix& hi_c_mat_wt, const ValueMatrix& hi_c_mat_mut, int left_1, int right_1, int left_2, int right_2, string print_filename = "");
+//
+void fit_hi_c_data_model (const ValueMatrix& hi_c_mat, int left, int right, int max_length_in_obj, HiCDataModel& hi_c_data_model, bool print_solver_status = false);
+//
+ValueList predict_HiC (const ValueMatrix& hi_c_mat_wt, const ValueMatrix& hi_c_mat_mut, const HiCDataModel& hi_c_data_model, const Genomic_Interaction_Distribution& genomic_interaction_dist, int left_1, int right_1, int left_2, int right_2, string print_prefix = "");
+//
+double predict_HiC (const ValueMatrix& hi_c_mat, const HiCDataModelList& hi_c_data_model_list, const Genomic_Interaction_Distribution& genomic_interaction_dist, int left_1, int right_1, int left_2, int right_2, string prefix_print = "");
+//
+ValueList predict_HiC (const ValueMatrix& hi_c_mat_wt, const ValueMatrix& hi_c_mat_mut, int left_1, int right_1, int left_2, int right_2, int max_length, const Genomic_Interaction_Distribution& genomic_interaction_dist, string print_prefix = "");
+//
+void print_distribution(int max_loop_length, int resolution);
+//
+void conventional_count_fusion (SequenceList& del_list, const SequenceList& tad_list, int score_index, bool is_printed = false); 		// overlap or not
+void conventional_estimate_fusion (SequenceList& del_list, const SequenceList& tad_boundary_list, int score_index, bool is_printed = false);	// find the max boundary score
+//
+void generate_TAD_fusion_score(const SequenceMatrix& del_mat, string hi_c_folder, string model_folder, string TAD_annotation_folder, string CTCF_filename, const Genomic_Interaction_Distribution& genomic_interaction_dist, int window_size, int sample_num, vector<SequenceMatrix>& result); // sample_num <= 0: find the score of primary deletions
+
+// Experiments
+void fig_S1_robustness_experiment();
+void print_prediction_case_study(int chr, int del_left, int del_right, int window_size, const Genomic_Interaction_Distribution& genomic_interaction_distribution, bool is_with_K562);
+void HoxD_case_study(const Genomic_Interaction_Distribution& genomic_interaction_dist, int window_size);
+void Firre_case_study(const Genomic_Interaction_Distribution& genomic_interaction_dist, int window_size);
+void K562_prediction(string del_filename, const Genomic_Interaction_Distribution& genomic_interaction_dist, string out_filename);
+void generate_TAD_fusion_score(string del_filename, int min_length, int max_length, string hi_c_folder, string model_folder, string TAD_annotation_folder, string CTCF_filename, const Genomic_Interaction_Distribution& genomic_interaction_dist, int window_size, int sample_num, string print_prefix); // sample_num <= 0: find the score of primary deletions
+void tilling_experiment(string del_filename, string hi_c_folder, string model_folder, string TAD_annotation_folder, string CTCF_filename, const Genomic_Interaction_Distribution& genomic_interaction_dist, int window_size, string output_prefix);
+double find_top_TAD_fusion_score_threshold(const string& primary_filename, int top);	// return a score at the top ranking position
+void analyze_TAD_fusion_score (const string& primary_filename, const StringList& permutation_filename_list = {}, const ValueList& cut_off_list = {10}, double score_threshold = INSULATION_SCORE_THRESHOLD);
+void compare_TAD_fusion_score_by_binning(string filename_1, string filename_2, double score_threshold, int bin_num, int bin_size, string out_file);
+
+int main() {
+	string CTCF_binding_filename = "/share/hormozdiarilab/Data/CTCF_Binding/UW_hg19_GM12878_CTCFBSDB.bed";
+	string TAD_annotation_folder = "/share/hormozdiarilab/Data/HiC/TAD_Annotation/GM12878/";
+	//string genomic_interaction_distribution_filename = "/share/hormozdiarilab/Data/HiC/Metric/top_restrict_contact_prob_chr_1_1000000_1000000.dat";
+	//string genomic_interaction_distribution_filename = "/share/hormozdiarilab/Data/HiC/Metric/Rao_loop_contact_prob_chr_1_1_max_length_1000000_rounded_500.dat";
+	string genomic_interaction_distribution_filename = "/share/hormozdiarilab/Data/HiC/Metric/Rao_loop_contact_prob_chr_1_23_max_length_1000000_rounded_500.dat";
+
+	string GM12878_hi_c_intra_chr_data_folder = "/share/hormozdiarilab/Data/HiC/GM12878_combined/5kb_resolution_intrachromosomal/chr",
+		K562_hi_c_intra_chr_data_folder = "",
+		GM12878_ReModel_folder = "/share/hormozdiarilab/Data/HiC/Model/GM12878/ReModel/";
+	string K562_del_filename = "/share/hormozdiarilab/Data/RECOMB_2018/old_K562_del.dat";
+
+	//string Original_1KG_deletion_filename = "/share/hormozdiarilab/Data/ValidatedVariants/1000G_SV_Phase3/ALL.Del.Bed",
+	//	GM12878_deletion_filename = "/share/hormozdiarilab/Data/ValidatedVariants/1000G_SV_Phase3/NA12878_Del.BED";
+
+	string One_KG_deletion_without_GM12878_filename = "/share/hormozdiarilab/Data/ValidatedVariants/1000G_SV_Phase3/1KG_without_GM12878_10000_10000000.dat";
+	string diseased_deletion_filename = "/share/hormozdiarilab/Data/RECOMB_2018/Diseased_del.dat";
+	string GreatApe_deletion_filename = "/share/hormozdiarilab/Data/RECOMB_2018/GreatApe/GreatApe.Del.Hg19";
+
+	string TCGA_ALL_filename = "/share/hormozdiarilab/Data/TCGA/TCGA_del.dat";
+	string TCGA_LAML_filename = "/share/hormozdiarilab/Data/TCGA/TCGA_LAML_CNV.dat";
+ 	
+	string DD_filename = "/share/hormozdiarilab/Data/ValidatedVariants/CNV_Morbidity_Map/Signature_Del_hg37.RemoveSegDups.Longer5kbp.Unique.bed";
+
+	cout << "MAX_OBJ_LENGTH = " << MAX_LENGTH_OBJ << endl;
+	cout << "FUSION_SCORE_WINDOW_SIZE = " << FUSION_SCORE_WINDOW_SIZE << endl;
+
+	fig_S1_robustness_experiment();
+
+	//export_all_hi_c_model (1,23);
+	//print_distribution(1000000, 5000);
+
+	Genomic_Interaction_Distribution genomic_interaction_dist;
+	genomic_interaction_dist.load(genomic_interaction_distribution_filename, 500);
+
+	//HoxD_case_study(genomic_interaction_dist, FUSION_SCORE_WINDOW_SIZE);
+	//Firre_case_study(genomic_interaction_dist, FUSION_SCORE_WINDOW_SIZE);
+	//K562_prediction(K562_del_filename, genomic_interaction_dist, "Debug/K562_stat.dat");
+
+	//generate_TAD_fusion_score(One_KG_deletion_without_GM12878_filename, 1e4, 1e7, 
+	//	GM12878_hi_c_intra_chr_data_folder, GM12878_ReModel_folder,	// old model 
+	//	TAD_annotation_folder, CTCF_binding_filename, genomic_interaction_dist,
+	//	FUSION_SCORE_WINDOW_SIZE, 0,"Debug/1KG_FinalModel");
+	//generate_TAD_fusion_score(One_KG_deletion_without_GM12878_filename, 1e4, 1e7, 
+	//	GM12878_hi_c_intra_chr_data_folder, GM12878_ReModel_folder,	// old model 
+	//	TAD_annotation_folder, CTCF_binding_filename, genomic_interaction_dist,
+	//	FUSION_SCORE_WINDOW_SIZE, 1500,"Debug/1KG_FinalModel");
+
+	//generate_TAD_fusion_score(GreatApe_deletion_filename, 1e4, 1e7, 
+	//	GM12878_hi_c_intra_chr_data_folder, GM12878_ReModel_folder,	// old model 
+	//	TAD_annotation_folder, CTCF_binding_filename, genomic_interaction_dist,
+	//	FUSION_SCORE_WINDOW_SIZE, 0,"Debug/GreatApe_FinalModel");
+	//generate_TAD_fusion_score(GreatApe_deletion_filename, 1e4, 1e7, 
+	//	GM12878_hi_c_intra_chr_data_folder, GM12878_ReModel_folder,	// old model 
+	//	TAD_annotation_folder, CTCF_binding_filename, genomic_interaction_dist,
+	//	FUSION_SCORE_WINDOW_SIZE, 500,"Debug/GreatApe_FinalModel");
+
+	//generate_TAD_fusion_score(diseased_deletion_filename, 1e4, 1e7, 
+	//	GM12878_hi_c_intra_chr_data_folder, GM12878_ReModel_folder, // old model 
+	//	TAD_annotation_folder, CTCF_binding_filename, genomic_interaction_dist,
+	//	FUSION_SCORE_WINDOW_SIZE, 0, "Debug/diseased_FinalModel");
+
+	//tilling_experiment(diseased_deletion_filename, GM12878_hi_c_intra_chr_data_folder, GM12878_ReModel_folder, 
+	//	TAD_annotation_folder, CTCF_binding_filename, genomic_interaction_dist, FUSION_SCORE_WINDOW_SIZE, "Debug/diseased_FinalModel");
+
+	//generate_TAD_fusion_score(TCGA_ALL_filename, 1e4, 5e5,
+	//	GM12878_hi_c_intra_chr_data_folder, GM12878_ReModel_folder, 
+	//	TAD_annotation_folder, CTCF_binding_filename, genomic_interaction_dist,
+	//	FUSION_SCORE_WINDOW_SIZE, 0,"Debug/TCGA_ALL_FinalModel");	// old model
+	//generate_TAD_fusion_score(DD_filename, 1e4, 5e5,
+	//	GM12878_hi_c_intra_chr_data_folder, GM12878_ReModel_folder, 
+	//	TAD_annotation_folder, CTCF_binding_filename, genomic_interaction_dist,
+	//	FUSION_SCORE_WINDOW_SIZE, 0,"Debug/DD_ReModel");	// old model
+
+	//cout << "New top 100 " << find_top_TAD_fusion_score_threshold("Debug/1KG_new_model_primary.dat", 100) << endl; 
+	//cout << "Old top 100 " << find_top_TAD_fusion_score_threshold("Debug/1KG_old_model_primary.dat", 100) << endl;
+	
+	//analyze_TAD_fusion_score("Debug/1KG_FinalModel_50_primary.dat");
+	//analyze_TAD_fusion_score("Debug/1KG_FinalModel_50_primary.dat", 
+	//	{"Permutation/1KG_FinalModel_50_permutation_5000.dat"}, 
+	//		{10, 50, 100, 200, 300, 400, 500, 1000, 1500, 2000});
+	//analyze_TAD_fusion_score("Debug/GreatApe_FinalModel_50_primary.dat", 
+	//	{"Permutation/GreatApe_FinalModel_50_permutation_5000.dat"}, 
+	//		{6, 9, 12, 15, 100, 500});
+
+	//compare_TAD_fusion_score_by_binning("Debug/1KG_FinalModel_50_primary.dat", "Debug/TCGA_ALL_FinalModel_50_primary.dat", 
+	//	find_top_TAD_fusion_score_threshold("Debug/1KG_FinalModel_50_primary.dat", 100),
+	//	10, 50000, "Debug/1KG_vs_TCGA_ALL_FinalModel");
+	
+	//compare_TAD_fusion_score_by_binning("Debug/1KG_ReModel_50_primary.dat", "Debug/DD_ReModel_50_primary.dat", 
+	//	find_top_TAD_fusion_score_threshold("Debug/1KG_ReModel_50_primary.dat", 100),
+	//	10, 50000, "Debug/1KG_vs_DD_ReModel");
+
+	//compare_TAD_fusion_score_by_binning("Debug/1KG_old_model_primary.dat", "Debug/GreatApe_old_model_primary.dat", 
+	//	find_top_TAD_fusion_score_threshold("Debug/1KG_old_model_primary.dat", 100),
+	//	10, 50000, "Debug/binning_1KG_vs_GreatApe_old_model.dat");
+
+	cout << "Complete" << endl;
+	return 1;
+}
+
+void tilling_experiment(string del_filename, string hi_c_folder, string model_folder, string tad_annotation_folder, string CTCF_filename, const Genomic_Interaction_Distribution& genomic_interaction_dist, int window_size, string output_prefix) {
+	SequenceMatrix del_mat;
+	read_sequence_list_file (del_filename, DELETION_FILE, 1e4, 1e7, del_mat);
+	// Sampling deletions
+
+	SequenceMatrix tilling_del_mat(del_mat.size());
+	SequenceMatrix del_index_mat = del_mat;	// each of them contains the low bound index and the up bound index of a deletion
+
+	int max_index = 0;
+	for (int chr = 0; chr < del_mat.size(); chr++) {
+		for (int del = 0; del < del_mat[chr].size(); del++) {
+			del_index_mat[chr][del].left = tilling_del_mat[chr].size();			
+			int current_left = del_mat[chr][del].left;
+			while (current_left < del_mat[chr][del].right) {
+				Sequence seq(current_left, current_left + 20000);
+				tilling_del_mat[chr].push_back(seq);
+				current_left += 1e4;
+			}
+			del_index_mat[chr][del].right = tilling_del_mat[chr].size() - 1;
+			max_index = max(max_index, del_index_mat[chr][del].right - del_index_mat[chr][del].left + 1);
+		}
+	}
+	vector<SequenceMatrix> result_del_cube;
+	generate_TAD_fusion_score (tilling_del_mat, hi_c_folder, model_folder, tad_annotation_folder, CTCF_filename, genomic_interaction_dist, window_size, 0, result_del_cube);
+
+	write_TAD_fusion_score_primary (result_del_cube[0], "Debug/tilling_tmp");
+
+	int del_num = count(del_mat);
+	ValueMatrix tilling_del_score_mat(del_num), CTCF_del_score_mat(del_num), without_CTCF_del_score_mat(del_num);
+	int del_index = 0;
+	for (int chr = 0; chr < del_mat.size(); chr++) {
+		for (int del = 0; del < del_mat[chr].size(); del++) {
+			for (int k = del_index_mat[chr][del].left; k <= del_index_mat[chr][del].right; k++) {
+				double fusion_score = result_del_cube[0][chr][k].score_list[6];
+				tilling_del_score_mat[del_index].push_back(fusion_score);	
+				if (result_del_cube[0][chr][k].score_list[5] > 0)
+					CTCF_del_score_mat[del_index].push_back(fusion_score);
+				else
+					without_CTCF_del_score_mat[del_index].push_back(fusion_score);
+			}
+			del_index++;
+		}			
+	}
+
+	string tilling_filename = output_prefix + "_tilling_all.dat";
+	ofstream tilling_file(tilling_filename.c_str());
+	tilling_file << "#";
+	for (int i = 0; i < max_index; i++) {
+		tilling_file << endl;
+		for (int j = 0; j < del_num; j++) {
+			if (i < tilling_del_score_mat[j].size())
+				tilling_file << tilling_del_score_mat[j][i];
+			else
+				tilling_file << ".";
+			tilling_file << "\t";
+		}
+	}
+
+	tilling_file.close();
+
+	string out_filename = output_prefix + "_tilling_vs_CTCF.dat";
+	ofstream out_file(out_filename.c_str());
+	out_file << "#";
+	for (int i = 0; i < max_index; i++) {
+		out_file << endl;
+		for (int j = 0; j < del_num; j++) {
+			if (i < CTCF_del_score_mat[j].size())
+				out_file << CTCF_del_score_mat[j][i];
+			else
+				out_file << ".";
+			out_file << "\t";
+		}
+		for (int j = 0; j < del_num; j++) {
+			if (i < without_CTCF_del_score_mat[j].size())
+				out_file << without_CTCF_del_score_mat[j][i];
+			else
+				out_file << ".";
+			out_file << "\t";
+		}
+	}
+	out_file.close();
+}
+
+void HoxD_case_study(const Genomic_Interaction_Distribution& genomic_interaction_dist, int fusion_score_window_size) {
+	ValueMatrix wt_mat, del_1_13_mat, del_attP_Rel5_mat;
+	read_5C_file("/share/hormozdiarilab/Data/HiC/HoxD_Gene_Development_2017/PL_HiC_E12_Wt__chr2__20kb__raw.matrix", 6, 9106, wt_mat);
+	read_5C_file("/share/hormozdiarilab/Data/HiC/HoxD_Gene_Development_2017/PL_HiC_E12_del1-13d9lac__chr2__20kb__raw.matrix_add_zero_lines.dat", 6, 9106, del_1_13_mat);	// origin: 9102
+	read_5C_file("/share/hormozdiarilab/Data/HiC/HoxD_Gene_Development_2017/PL_HiC_E12_delattP-Rel5d9lac__chr2__20kb__raw.matrix_add_zero_lines.dat", 6, 9106, del_attP_Rel5_mat); // origin: 9089
+	
+	//for (int i = 500; i < 1000; i++)
+	//	cout << wt_mat[i][i] << endl;
+	// HoxD: 73,500,000 - 76,000,000
+	// del_1_13_d9lac: 74,663,890 - 74,764,314
+	int resolution = 20000;
+	int left = round(73500000/resolution), right = round(76000000/resolution);
+	int del_1_left = floor(74663890/resolution), del_1_right = floor(74764314/resolution);
+	ValueList result = predict_HiC(wt_mat, del_1_13_mat, left, del_1_left, del_1_right, right, MAX_LENGTH_OBJ, genomic_interaction_dist, "Debug/Del_1_13_full");
+	cout << "PCC = " << result[0] << ", L1 = " << result[2] << endl;
+	// del_attP_Rel5_d9lac: 74,422,050 - 74,768,746
+	int del_2_left = floor(74422050/resolution), del_2_right = floor(74768746/resolution) + 1;
+	result = predict_HiC(wt_mat, del_attP_Rel5_mat, left, del_2_left, del_2_right, right, MAX_LENGTH_OBJ, genomic_interaction_dist, "Debug/Del_attP_Rel5_full");
+	cout << "PCC = " << result[0] << ", L1 = " << result[2] << endl;
+
+	// For scoring
+	result = predict_HiC(wt_mat, del_1_13_mat, del_1_left - fusion_score_window_size, del_1_left, del_1_right, del_1_right + fusion_score_window_size, 
+		MAX_LENGTH_OBJ, genomic_interaction_dist, "Debug/Del_1_13_score_only");
+	cout << "Del_1_13, fusion score = " << result[4] << endl;
+
+	result = predict_HiC(wt_mat, del_attP_Rel5_mat, del_2_left - fusion_score_window_size, del_2_left, del_2_right, del_2_right + fusion_score_window_size, 
+		MAX_LENGTH_OBJ, genomic_interaction_dist, "Debug/Del_attP_Rel5_score_only");
+	cout << "Del_attP_Rel5, fusion score = " << result[4] << endl;
+}
+
+void Firre_case_study(const Genomic_Interaction_Distribution& genomic_interaction_dist, int fusion_score_window_size) {
+	ValueMatrix wt_mat_10kb, Firre_del_mat_10kb, wt_mat_40kb, Firre_del_mat_40kb; 
+
+	read_5C_file("/share/hormozdiarilab/Data/HiC/Firre_Nat_Comm/Female_MEF_FirreWT_mm9_40000_iced_chrX_dense.addedHeaders.matrix", 19, 4167, wt_mat_40kb);
+	read_5C_file("/share/hormozdiarilab/Data/HiC/Firre_Nat_Comm/Female_MEF_FirreKO_mm9_40000_iced_chrX_dense.addedHeaders.matrix", 19, 4167, Firre_del_mat_40kb);
+	//read_5C_file("/share/hormozdiarilab/Data/HiC/Firre_Nat_Comm/Combined_femaleWT_10000_iced_chrX_dense.addedHeaders.matrix", 19, 16666, wt_mat_10kb);
+	//read_5C_file("/share/hormozdiarilab/Data/HiC/Firre_Nat_Comm/Combined_femaleKO_10000_iced_chrX_dense.addedHeaders.matrix", 19, 16666, Firre_del_mat_10kb);
+
+	//for (int i = 500; i < 1000; i++)
+	//	cout << wt_mat[i][i] << endl;
+	int resolution_40kb = 40000;
+	int left = round(46500000/resolution_40kb), right = round(49500000/resolution_40kb);
+	int del_left = round(47908463/resolution_40kb), del_right = round(47990293/resolution_40kb);
+	ValueList result = predict_HiC(wt_mat_40kb, Firre_del_mat_40kb, left, del_left, del_right, right, MAX_LENGTH_OBJ, genomic_interaction_dist, "Debug/Firre_Del_40kb_full");
+	cout << "40kb, PCC = " << result[0] << ", L1 = " << result[2] << endl;
+
+	//int resolution_10kb = 10000;
+	//int left = round(46500000/resolution_10kb), right = round(49500000/resolution_10kb);
+	//int del_left = floor(47908463/resolution_10kb), del_right = floor(47990293/resolution_10kb) + 1;
+	//ValueList result = predict_HiC(wt_mat_10kb, Firre_del_mat_10kb, left, del_left, del_right, right, MAX_LENGTH_OBJ, dummy_contact_prob_list, "Debug/Firre_Del_10kb");
+	//cout << "10kb, PCC = " << result[0] << ", L1 = " << result[2] << endl;
+
+	// For scoring
+	result = predict_HiC(wt_mat_40kb, Firre_del_mat_40kb, del_left - fusion_score_window_size, del_left, del_right, del_right + fusion_score_window_size, 
+		MAX_LENGTH_OBJ, genomic_interaction_dist, "Debug/Firre_Del_40kb_score_only");
+	cout << "Firre deletion, fusion score = " << result[4] << endl;
+
+}
+
+void analyze_TAD_fusion_score (const string& primary_filename, const StringList& permutation_filename_list, const ValueList& top_cut_off_list, double score_threshold) {
+	// For the primary
+	SequenceMatrix primary_fusion_score_mat;
+	read_sequence_list_file (primary_filename, TAD_FUSION_SCORE_FILE, 0, 1e9, primary_fusion_score_mat);
+
+	StringList tool_name_list = {"Insulation_score", "Armatus          ", "CaTCH            ", "Arrowhead         "};
+	
+	vector<StringList> consensus_content (tool_name_list.size() + 1);
+	for (int chr = 0; chr < 23; chr++) 
+		for (int del = 0; del < primary_fusion_score_mat[chr].size(); del++) {
+			int consensus = 0;
+			for (int t = 0; t < tool_name_list.size(); t++)
+				if (primary_fusion_score_mat[chr][del].score_list[t] >= score_threshold)
+					consensus++;
+			consensus_content[consensus].push_back(((chr <=21)? num_to_string(chr+1):"X") 
+				+ "\t" + num_to_string(primary_fusion_score_mat[chr][del].left) 
+				+ "\t" + num_to_string(primary_fusion_score_mat[chr][del].right) 
+				+ "\t" + to_string(primary_fusion_score_mat[chr][del].score_list[6]));
+		}
+
+	ofstream consensus_file(primary_filename + "_consensus.dat");
+	consensus_file << "#";
+	for (int i = 0; i < consensus_content[0].size(); i++) {
+		consensus_file << endl;
+		for (int t = 0; t <= tool_name_list.size(); t++)
+			if (i < consensus_content[t].size())
+				consensus_file << "\t" << consensus_content[t][i];
+			else
+				consensus_file << "\t" << ".\t.\t.\t.";
+	}
+	consensus_file.close();
+	
+	//ValueList top_cut_off_list = {80, 90, 100, 110, 120};
+	ValueList fusion_score_cut_off_list (top_cut_off_list.size(), 0);
+	for (int i = 0; i < top_cut_off_list.size(); i++)
+		fusion_score_cut_off_list[i] = find_top_TAD_fusion_score_threshold(primary_filename, top_cut_off_list[i]);
+
+	ValueMatrix fusion_count_mat;
+	ValueList fusion_score_sum_list;
+	//vector<SequenceMatrix> permutation_fusion_score_cube;
+	for (int file = 0; file < permutation_filename_list.size(); file++) {
+		vector<SequenceMatrix> fusion_score_cube_tmp;
+		read_TAD_fusion_score_permutation(permutation_filename_list[file], primary_fusion_score_mat, fusion_score_cube_tmp);
+		for (int rep = 0; rep < fusion_score_cube_tmp.size(); rep++) {
+			//cout << fusion_score_cube_tmp.size() << endl;
+			ValueList fusion_count_list_tmp(top_cut_off_list.size(), 0);
+			for (int chr = 0; chr < 23; chr++) {
+				for (int del = 0; del < fusion_score_cube_tmp[rep][chr].size(); del++) {
+					for (int k = 0; k < top_cut_off_list.size(); k++)
+						if (fusion_score_cube_tmp[rep][chr][del].score_list[4] >= fusion_score_cut_off_list[k])
+							fusion_count_list_tmp[k]++;
+				}
+			}
+			fusion_count_mat.push_back(fusion_count_list_tmp);
+			fusion_score_sum_list.push_back(find_fusion_score_sum(fusion_score_cube_tmp[rep], 4));
+		}	
+		//for (int rep = 0; rep < fusion_score_cube_tmp.size(); rep++)
+		//	permutation_fusion_score_cube.push_back(fusion_score_cube_tmp[rep]);		
+	}
+	string summary_filename =  primary_filename + "_" + num_to_string(fusion_count_mat.size()) + "_permutation_summary.dat";
+	ofstream out_file(summary_filename.c_str());
+	out_file << "#";
+	for (int rep = 0; rep <= fusion_count_mat.size(); rep++) {
+		for (int i = 0; i < top_cut_off_list.size(); i++) {			
+			if (rep == 0)
+				out_file << "\t" << top_cut_off_list[i];
+			else
+				out_file << "\t" << fusion_count_mat[rep - 1][i];
+		}
+		if (rep == 0)
+			out_file << "\t" << find_fusion_score_sum(primary_fusion_score_mat, 6);
+		else
+			out_file << "\t" << fusion_score_sum_list[rep - 1];
+		out_file << endl;
+	}
+	out_file.close();
+}
+
+double find_top_TAD_fusion_score_threshold(const string& primary_filename, int top) {
+	SequenceMatrix fusion_score_mat;
+	read_sequence_list_file (primary_filename, TAD_FUSION_SCORE_FILE, 0, 1e9, fusion_score_mat);
+	ValueList score_list_tmp;
+	for (int chr = 0; chr < 23; chr++)
+		for (int del = 0; del < fusion_score_mat[chr].size(); del++)
+			score_list_tmp.push_back(fusion_score_mat[chr][del].score_list[6]);
+	ValueList sorted_index_list, rank_tmp;
+	sort_by_value (score_list_tmp, sorted_index_list, rank_tmp, false);
+	return score_list_tmp[sorted_index_list[top]];
+}
+
+void make_TAD_fusion_score_binning (const SequenceMatrix& fusion_score_mat, double score_threshold, int bin_num, int bin_size, ValueMatrix& raw_score_mat, ValueList& del_num_list, ValueList& fusion_num_list, ValueList& percentage_list) {
+	raw_score_mat.resize(bin_num);
+	del_num_list.resize(bin_num, 0);
+	fusion_num_list.resize(bin_num, 0);
+	percentage_list.resize(bin_num, 0);
+	for (int chr = 0; chr < 23; chr++) {
+		for (int del = 0; del < fusion_score_mat[chr].size(); del++) {
+			int del_length = fusion_score_mat[chr][del].right - fusion_score_mat[chr][del].left + 1;
+			int bin = -1;
+			for (int k = 0; k < bin_num; k++)
+				if (del_length >= k*bin_size && del_length <= (k+1)*bin_size) {
+					bin = k;
+					break;
+				}
+			if (bin >= 0) {
+				double fusion_score = fusion_score_mat[chr][del].score_list[6];
+				raw_score_mat[bin].push_back(fusion_score);
+				del_num_list[bin]++;
+				if (fusion_score >= score_threshold)
+					fusion_num_list[bin]++;
+			}
+		}
+	}
+	for (int bin = 0; bin < bin_num; bin++)
+		percentage_list[bin] = ((del_num_list[bin] > 0)? (fusion_num_list[bin]/del_num_list[bin]):0);
+}
+
+void compare_TAD_fusion_score_by_binning(string filename_1, string filename_2, double score_threshold, int bin_num, int bin_size, string out_filename) {
+	ValueMatrix raw_score_mat_1, raw_score_mat_2;
+	ValueList del_num_list_1, del_num_list_2,
+		fusion_num_list_1, fusion_num_list_2,
+		percentage_list_1, percentage_list_2;
+	SequenceMatrix fusion_score_mat_1, fusion_score_mat_2;
+	read_sequence_list_file (filename_1, TAD_FUSION_SCORE_FILE, 0, 1e9, fusion_score_mat_1);
+	read_sequence_list_file (filename_2, TAD_FUSION_SCORE_FILE, 0, 1e9, fusion_score_mat_2);
+	make_TAD_fusion_score_binning (fusion_score_mat_1, score_threshold, bin_num, bin_size, raw_score_mat_1, del_num_list_1, fusion_num_list_1, percentage_list_1);
+	make_TAD_fusion_score_binning (fusion_score_mat_2, score_threshold, bin_num, bin_size, raw_score_mat_2, del_num_list_2, fusion_num_list_2, percentage_list_2);
+
+	
+	int del_num = max(count(fusion_score_mat_1), count(fusion_score_mat_2));
+	string raw_filename = out_filename + "_raw.dat";
+	ofstream raw_file(raw_filename.c_str());
+	raw_file << "#";
+	for (int i = -1; i < del_num; i++) {
+		if (i >= 0)
+			raw_file << endl;
+		for (int j = 0; j < bin_num; j++)
+			if (i < 0)
+				raw_file << j*bin_size << "\t";
+			else {
+				if (i < raw_score_mat_1[j].size())
+					raw_file << raw_score_mat_1[j][i] << "\t";
+				else
+					raw_file << "." << "\t";
+			}
+		for (int j = 0; j < bin_num; j++)
+			if (i < 0)
+				raw_file << j*bin_size << "\t";
+			else {
+				if (i < raw_score_mat_2[j].size())
+					raw_file << raw_score_mat_2[j][i] << "\t";
+				else
+					raw_file << "." << "\t";
+			}
+
+	}
+	raw_file.close();
+
+	string cut_off_filename = out_filename + "_cut_off.dat";
+	ofstream cut_off_file(cut_off_filename.c_str());	
+	for (int i = 0; i < bin_num; i++)
+		cut_off_file << i*bin_size << "-" << (i+1)*bin_size 
+			<< "\t" << del_num_list_1[i] << "\t" << fusion_num_list_1[i] << "\t" << percentage_list_1[i] 
+			<< "\t" << del_num_list_2[i] << "\t" << fusion_num_list_2[i] << "\t" << percentage_list_2[i]
+			<< endl;
+	cut_off_file.close();
+}
+
+void print_prediction_case_study(int chr, int del_left, int del_right, int window_size, const Genomic_Interaction_Distribution& genomic_interaction_dist, bool is_with_K562) {
+	string GM12878_intra_data_folder = "/share/hormozdiarilab/Data/HiC/GM12878_combined/5kb_resolution_intrachromosomal/chr";
+	string K562_intra_data_folder = "/share/hormozdiarilab/Data/HiC/K562/K562_intrachromosomal/5kb_resolution_intrachromosomal/chr";
+	string chr_name = ((chr < 23)? num_to_string(chr):"X");
+	string GM_intra_filename = GM12878_intra_data_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved";
+	ValueMatrix GM_hi_c_mat;
+	read_hi_c_data(GM_intra_filename, RESOLUTION, GM_hi_c_mat);
+
+	int del_left_bin = floor(del_left/RESOLUTION), 
+		del_right_bin = floor(del_right/RESOLUTION);
+	int left_1 = ((del_left_bin >= window_size)? (del_left_bin - window_size):0),
+		right_2 = ((del_right_bin + window_size < GM_hi_c_mat.size())? (del_right_bin + window_size):(GM_hi_c_mat.size() - 1));
+	printf("%d\t%d\t%d\t%d\n", left_1, del_left_bin - 1, del_right_bin + 1, right_2);
+	
+	string print_out_filename = "Debug/pred_vs_obs_chr_" + num_to_string(chr) + "_" + num_to_string(del_left) + "_" + num_to_string(del_right) + "_" + num_to_string(window_size) + ".dat";	
+	if (is_with_K562) {
+		string K_intra_filename = K562_intra_data_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved";
+		ValueMatrix K_hi_c_mat;
+		read_hi_c_data(K_intra_filename, RESOLUTION, K_hi_c_mat);
+		ValueList new_result = predict_HiC(GM_hi_c_mat, K_hi_c_mat, left_1, del_left_bin - 1, del_right_bin + 1, right_2, 
+			MAX_LENGTH_OBJ, genomic_interaction_dist, print_out_filename);
+	}
+	else
+		ValueList new_result = predict_HiC(GM_hi_c_mat, GM_hi_c_mat, left_1, del_left_bin - 1, del_right_bin + 1, right_2, 
+			MAX_LENGTH_OBJ, genomic_interaction_dist, print_out_filename);
+}
+
+void K562_prediction(string del_filename, const Genomic_Interaction_Distribution& genomic_interaction_dist, string out_filename) {
+	// For deletions	
+	SequenceMatrix del_mat;
+	read_sequence_list_file (del_filename, DELETION_FILE, 5000, 10000000, del_mat);
+	string GM12878_intra_data_folder = "/share/hormozdiarilab/Data/HiC/GM12878_combined/5kb_resolution_intrachromosomal/chr";
+	string K562_intra_data_folder = "/share/hormozdiarilab/Data/HiC/K562/K562_intrachromosomal/5kb_resolution_intrachromosomal/chr";
+
+	ValueList window_size_list = {50, 100, 200, 400};
+	ValueMatrix chr_list(window_size_list.size()), 
+		left_list(window_size_list.size()), 
+		right_list(window_size_list.size()), 
+		PCC_list(window_size_list.size()),
+		L1_list(window_size_list.size()),
+		max_list(window_size_list.size()),
+		mean_list(window_size_list.size());
+
+	for (int chr = 1; chr <= 23; chr++) {
+		if (chr == 8)		// This deletion is from GM12878
+			continue;
+		string chr_name = ((chr < 23)? num_to_string(chr):"X");
+		string GM_intra_filename = GM12878_intra_data_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved",
+			K_intra_filename = K562_intra_data_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved"; 
+		ValueMatrix GM_hi_c_mat, K_hi_c_mat;
+		if (!del_mat[chr - 1].empty()) {
+			read_hi_c_data(GM_intra_filename, RESOLUTION, GM_hi_c_mat);
+			read_hi_c_data(K_intra_filename, RESOLUTION, K_hi_c_mat);
+		}
+		for (int del = 0; del < del_mat[chr - 1].size(); del++) {
+			for (int w = 0; w < window_size_list.size(); w++) {
+				int window_size = window_size_list[w];
+				int del_left = floor(del_mat[chr - 1][del].left/RESOLUTION), 
+					del_right = floor(del_mat[chr - 1][del].right/RESOLUTION);
+				int left_1 = ((del_left >= window_size)? (del_left - window_size):0),
+					right_2 = ((del_right + window_size < GM_hi_c_mat.size())? (del_right + window_size):(GM_hi_c_mat.size() - 1));
+				//printf("%d\t%d\t%d\t%d\n", left_1, del_left - 1, del_right + 1, right_2);
+	
+				//ValueList GM_inter_list, K_inter_list;
+				//for (int i = left_1; i <= del_left - 1; i++)
+				//	for (int j = del_right + 1; j <= right_2; j++) {
+				//		GM_inter_list.push_back(GM_hi_c_mat[i][j]);
+				//		K_inter_list.push_back(K_hi_c_mat[i][j]);
+				//	}
+			
+				//ValueList length_based_result = length_based_model_prediction(GM_hi_c_mat, K_hi_c_mat, left_1, del_left - 1, del_right + 1, right_2, ((window_size <= 100)? ("Debug/A1_chr_" + num_to_string(chr) + "_" + num_to_string(del_mat[chr-1][del].left) + "_" + num_to_string(del_mat[chr-1][del].right) + "_" + num_to_string(window_size) + ".dat"):""));
+				//ValueList upgrade_length_based_result = predict_HiC(GM_hi_c_mat, K_hi_c_mat, left_1, del_left - 1, del_right + 1, right_2, MAX_LENGTH_OBJ, contact_prob_list, ((window_size <= 100)? ("Debug/A2_chr_" + num_to_string(chr) + "_" + num_to_string(del_mat[chr-1][del].left) + "_" + num_to_string(del_mat[chr-1][del].right) + "_" + num_to_string(window_size) + ".dat"):""));
+;
+				ValueList new_result = predict_HiC(GM_hi_c_mat, K_hi_c_mat, left_1, del_left - 1, del_right + 1, right_2, MAX_LENGTH_OBJ, genomic_interaction_dist, "DO_NOT_WRITE_A_FILE");
+				chr_list[w].push_back(chr);
+				left_list[w].push_back(del_mat[chr - 1][del].left);
+				right_list[w].push_back(del_mat[chr - 1][del].right);
+				PCC_list[w].push_back(new_result[0]);
+				L1_list[w].push_back(new_result[2]);
+				max_list[w].push_back(new_result[5]);
+				mean_list[w].push_back(new_result[6]);
+			}
+		}	
+	}
+	ofstream out_file(out_filename.c_str());	
+	for (int w = 0; w < window_size_list.size(); w++) {
+		out_file << "Window size = " << window_size_list[w] << endl;
+		out_file << "Chr\tDel_left\tDel_right\tDel_length\tPCC\tMax\tMean\tL1" << endl;
+		for (int i = 0; i < chr_list[w].size(); i++)
+			out_file << chr_list[w][i] << "\t" << left_list[w][i] << "\t" << right_list[w][i] 
+				<< "\t" << right_list[w][i] - left_list[w][i] << "\t" << PCC_list[w][i]
+				<< "\t" << max_list[w][i] << "\t" << mean_list[w][i]  << "\t" << L1_list[w][i] << endl; 
+	}
+	out_file.close();
+}
+
+
+void fig_S1_robustness_experiment() {
+	ValueList max_interaction_length = {100, 150, 200, 250, 300};
+	//ValueList max_training_window_length = {5e6, 5.5e6, 6e6, 6.5e6, 7e6};
+	ValueList max_training_window_length = {4e6, 4.5e6, 5.5e6, 6e6};
+	int remaining_length = 3e6;
+
+	//for (int i = 0; i < max_interaction_length.size(); i++)
+	//	export_all_hi_c_model (21, 21, max_interaction_length[i], 4e6, 1e6);
+	//for (int i = 0; i < max_training_window_length.size(); i++)
+	//	export_all_hi_c_model (21, 21, 100, max_training_window_length[i], max_training_window_length[i] - remaining_length, "Model_Robustness/");
+
+	SequenceMatrix One_KG_del_mat;
+	string One_KG_deletion_without_GM12878_filename = "/share/hormozdiarilab/Data/ValidatedVariants/1000G_SV_Phase3/1KG_without_GM12878_10000_10000000.dat";
+	read_sequence_list_file (One_KG_deletion_without_GM12878_filename, DELETION_FILE, 5000, 1000000, One_KG_del_mat);
+
+	int chr = 21;
+	cout << "Robustness Exp: #Deletion = " << One_KG_del_mat[chr - 1].size() << endl;
+
+	string GM12878_intra_data_folder = "/share/hormozdiarilab/Data/HiC/GM12878_combined/5kb_resolution_intrachromosomal/chr";
+	string chr_name = ((chr < 23)? num_to_string(chr):"X");
+	string GM_intra_filename = GM12878_intra_data_folder + chr_name + "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved";
+	ValueMatrix hi_c_mat;
+	read_hi_c_data(GM_intra_filename, RESOLUTION, hi_c_mat);
+
+
+	ValueList score_window_length = {50, 100, 150, 200, 250, 300};
+	ValueMatrix max_interaction_length_fusion_score_mat (max_interaction_length.size()),
+		max_training_window_length_fusion_score_mat (max_training_window_length.size()),
+		score_window_length_fusion_score_mat (score_window_length.size());
+	
+
+	string genomic_interaction_distribution_filename = "/share/hormozdiarilab/Data/HiC/Metric/Rao_loop_contact_prob_chr_1_23_max_length_1000000_rounded_500.dat";
+	Genomic_Interaction_Distribution genomic_interaction_dist;
+	genomic_interaction_dist.load(genomic_interaction_distribution_filename, 500);
+
+
+	int window_size = 50;
+	string model_folder = "Model_Robustness/";
+	/*for (int i = 0; i < max_interaction_length.size(); i++) {
+		HiCDataModelList hi_c_data_model_list;
+		read_hi_c_data_model_list(model_folder + "chr" + chr_name + "_" + num_to_string(round(max_interaction_length[i])) + "_4000000_1000000.model", hi_c_data_model_list);
+		for (int del = 0; del < One_KG_del_mat[chr - 1].size(); del++) {
+			int left = floor(One_KG_del_mat[chr - 1][del].left/RESOLUTION), 
+				right = ceil(One_KG_del_mat[chr - 1][del].right/RESOLUTION) - 1;
+			if (right < hi_c_mat.size() - 5) {
+				int left_boundary = ((left >= window_size)? (left - window_size):0),
+					right_boundary = ((right + window_size < hi_c_mat.size())? (right + window_size):(hi_c_mat.size()-1));
+				max_interaction_length_fusion_score_mat[i].push_back(predict_HiC(hi_c_mat, hi_c_data_model_list, 
+					genomic_interaction_dist, left_boundary, left - 1, right + 1, right_boundary));	// corrected	
+			}
+		}
+	}*/		
+	for (int i = 0; i < max_training_window_length.size(); i++) {
+		HiCDataModelList hi_c_data_model_list;
+		StringList xxx = {"4000000_1000000", "4500000_1500000", "5500000_2500000", "6000000_3000000"};
+		read_hi_c_data_model_list(model_folder + "chr" + chr_name + "_100_" + xxx[i] + ".model", hi_c_data_model_list);
+
+		//read_hi_c_data_model_list(model_folder + "chr" + chr_name + "_100_" 
+		//	+ num_to_string(round(max_training_window_length[i])) + "_" + num_to_string(round(max_training_window_length[i] - remaining_length))  + ".model", hi_c_data_model_list);
+		for (int del = 0; del < One_KG_del_mat[chr - 1].size(); del++) {
+			int left = floor(One_KG_del_mat[chr - 1][del].left/RESOLUTION), 
+				right = ceil(One_KG_del_mat[chr - 1][del].right/RESOLUTION) - 1;
+			if (right < hi_c_mat.size() - 5) {
+				int left_boundary = ((left >= window_size)? (left - window_size):0),
+					right_boundary = ((right + window_size < hi_c_mat.size())? (right + window_size):(hi_c_mat.size()-1));
+				max_training_window_length_fusion_score_mat[i].push_back(predict_HiC(hi_c_mat, hi_c_data_model_list, 
+					genomic_interaction_dist, left_boundary, left - 1, right + 1, right_boundary));	// corrected	
+			}
+		}
+	}		
+	/*for (int i = 0; i < score_window_length.size(); i++) {
+		HiCDataModelList hi_c_data_model_list;
+		read_hi_c_data_model_list(model_folder + "chr" + chr_name + "_100_7000000_3000000.model", hi_c_data_model_list);
+		window_size = score_window_length[i];
+		for (int del = 0; del < One_KG_del_mat[chr - 1].size(); del++) {
+			int left = floor(One_KG_del_mat[chr - 1][del].left/RESOLUTION), 
+				right = ceil(One_KG_del_mat[chr - 1][del].right/RESOLUTION) - 1;
+			if (right < hi_c_mat.size() - 5) {
+				int left_boundary = ((left >= window_size)? (left - window_size):0),
+					right_boundary = ((right + window_size < hi_c_mat.size())? (right + window_size):(hi_c_mat.size()-1));
+				score_window_length_fusion_score_mat[i].push_back(predict_HiC(hi_c_mat, hi_c_data_model_list, 
+					genomic_interaction_dist, left_boundary, left - 1, right + 1, right_boundary));	// corrected	
+			}
+		}
+	}*/		
+
+	//cout << "Max interaction length" << endl;
+	//for (int j = 0; j < max_interaction_length_fusion_score_mat[0].size(); j++) {
+	//	for (int i = 0; i < max_interaction_length_fusion_score_mat.size(); i++)
+	//		cout << "\t" << max_interaction_length_fusion_score_mat[i][j];
+	//	cout << endl;
+	//}
+	//for (int i = 0; i < max_interaction_length.size(); i++) {
+	//	cout << endl;
+	//	for (int j = 0; j < max_interaction_length.size(); j++)
+	//		cout_file << PCC(max_interaction_length_fusion_score_mat[i], max_interaction_length_fusion_score_mat[j], ZERO) << "\t";
+	//}
+	cout << "===============" << endl;
+	cout << "Max training window length" << endl;
+	for (int j = 0; j < max_training_window_length_fusion_score_mat[0].size(); j++) {
+		for (int i = 0; i < max_training_window_length_fusion_score_mat.size(); i++)
+			cout << "\t" << max_training_window_length_fusion_score_mat[i][j];
+		cout << endl;
+	}
+	//for (int i = 0; i < max_training_window_length.size(); i++) {
+	//	cout << endl;
+	//	for (int j = 0; j < max_training_window_length.size(); j++)
+	//		cout << PCC(max_training_window_length_fusion_score_mat[i], max_training_window_length_fusion_score_mat[j], ZERO) << "\t";
+	//}	
+	cout << "===============" << endl;
+	//cout << "Score window size" << endl;
+	//for (int j = 0; j < score_window_length_fusion_score_mat[0].size(); j++) {
+	//	for (int i = 0; i < score_window_length_fusion_score_mat.size(); i++)
+	//		cout << "\t" << score_window_length_fusion_score_mat[i][j];
+	//	cout << endl;
+	//}
+	//for (int i = 0; i < score_window_length.size(); i++) {
+	//	cout << endl;
+	//	for (int j = 0; j < score_window_length.size(); j++)
+	//		cout << PCC(score_window_length_fusion_score_mat[i], score_window_length_fusion_score_mat[j], ZERO) << "\t";
+	//}
+	//cout << "===============" << endl;
+
+	ofstream out_file;
+	/*out_file.open("Debug/robust_max_interaction_length.dat");
+	out_file << "#";
+	for (int i = 0; i < max_interaction_length.size(); i++) {
+		for (int j = 0; j < max_interaction_length.size(); j++)
+			out_file << endl << i + 1 << "\t" << j + 1 << "\t" 
+				<< PCC(max_interaction_length_fusion_score_mat[i], max_interaction_length_fusion_score_mat[j], ZERO);
+	}
+	out_file.close();*/
+	out_file.open("Debug/robust_training_window_size.dat");
+	out_file << "#";
+	for (int i = 0; i < max_training_window_length.size(); i++) {
+		for (int j = 0; j < max_training_window_length.size(); j++)
+			out_file << endl << i + 1 << "\t" << j + 1 << "\t"
+				<< PCC(max_training_window_length_fusion_score_mat[i], max_training_window_length_fusion_score_mat[j], ZERO);
+	}	
+	out_file.close();
+	/*out_file.open("Debug/robust_score_window_size.dat");
+	out_file << "#";
+	for (int i = 0; i < score_window_length.size(); i++) {
+		for (int j = 0; j < score_window_length.size(); j++)
+			out_file << endl << i + 1 << "\t" << j + 1 << "\t" 
+				<< PCC(score_window_length_fusion_score_mat[i], score_window_length_fusion_score_mat[j], ZERO);
+	}
+	out_file.close();*/
+}
+
+void generate_TAD_fusion_score(const SequenceMatrix& del_mat, string hi_c_folder, string model_folder, string tad_annotation_folder, string CTCF_filename, const Genomic_Interaction_Distribution& genomic_interaction_dist, int window_size, int sample_num, vector<SequenceMatrix>& result_del_cube) {
+	result_del_cube.clear();
+	if (sample_num <= 0)
+		result_del_cube.push_back(del_mat);
+	else {
+		double rand_resolution = 1e9;
+		int rand_resolution_plus = round(rand_resolution + 1.0);
+		int buffer_size = 100000;	// Minimum window region for estimating the TAD-fusion score
+		for (int s = 0; s < sample_num; s++) {
+			SequenceMatrix del_mat_tmp(23);
+			ValueList chr_bin_length_list = {49847,
+				48638,
+				39585,
+				38209,
+				36178,
+				34210,
+				31826,
+				29261,
+				28223,
+				27105,
+				26990,
+				26769,
+				23022,
+				21458,
+				20505,
+				18059,
+				16240,
+				15604,
+				11824,
+				12594,
+				9623,
+				10249,
+				31052
+			};
+			for (int chr = 0; chr < 23; chr++) {
+				del_mat_tmp[chr].resize(del_mat[chr].size());
+				for (int del = 0; del < del_mat[chr].size(); del++) {
+					int l = del_mat[chr][del].right - del_mat[chr][del].left;
+					double r = (rand() % rand_resolution_plus)/rand_resolution;
+					del_mat_tmp[chr][del].left = round(r*(chr_bin_length_list[chr]*RESOLUTION - l - 2*buffer_size)) + buffer_size;
+					del_mat_tmp[chr][del].right = del_mat_tmp[chr][del].left + l;
+				}			
+			}
+			result_del_cube.push_back(del_mat_tmp);
+		}			
+	}
+
+	// Load other TAD callers
+	string insulation_score_tad_filename = tad_annotation_folder + "insulation_score_TAD.dat",
+		Armatus_tad_filename = tad_annotation_folder + "Amaratus_TAD.dat",
+		CaTCH_tad_filename = tad_annotation_folder + "CaTCH_TAD.dat",
+		Arrowhead_tad_filename = tad_annotation_folder + "GSE63525_GM12878_primary+replicate_Arrowhead_domainlist.txt";
+
+	SequenceMatrix insulation_score_tad_mat, Armatus_tad_mat, CaTCH_tad_mat, Arrowhead_tad_mat;
+	int min_tad_length = 50000, max_tad_length = 1e7;
+	read_sequence_list_file (insulation_score_tad_filename, INSULATION_SCORE_FILE, min_tad_length/10, max_tad_length, insulation_score_tad_mat);
+	read_sequence_list_file (Armatus_tad_filename, JUICE_FILE, min_tad_length, max_tad_length, Armatus_tad_mat);
+	read_sequence_list_file (CaTCH_tad_filename, JUICE_FILE, min_tad_length, max_tad_length, CaTCH_tad_mat);
+	read_sequence_list_file (Arrowhead_tad_filename, JUICE_FILE, min_tad_length, max_tad_length, Arrowhead_tad_mat);
+
+	// Load CFCF file
+	SequenceMatrix CTCF_mat;
+	read_sequence_list_file(CTCF_filename, CTCF_FILE, 0, 1e9, CTCF_mat);
+
+	for (int chr = 1; chr <= 23; chr++) { 
+		string chr_name = ((chr < 23)? num_to_string(chr):"X");
+		string chr_raw_data_filename = hi_c_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved"; 
+		ValueMatrix hi_c_mat;
+		if (!del_mat[chr - 1].empty()) {
+			read_hi_c_data(chr_raw_data_filename, RESOLUTION, hi_c_mat);
+			HiCDataModelList hi_c_data_model_list;
+			read_hi_c_data_model_list(model_folder + "chr" + chr_name + ".model", hi_c_data_model_list);
+			cout << "Complete loading Hi-C model of chromosome " << chr_name << endl;
+
+			for (int rep = 0; rep < result_del_cube.size(); rep++) {
+				for (int del = 0; del < result_del_cube[rep][chr - 1].size(); del++) {
+					result_del_cube[rep][chr - 1][del].score_list.resize(7);
+					int left = floor(result_del_cube[rep][chr - 1][del].left/RESOLUTION), 
+						right = ceil(result_del_cube[rep][chr - 1][del].right/RESOLUTION) - 1;
+					if (right < hi_c_mat.size() - 5) {
+						int left_boundary = ((left >= window_size)? (left - window_size):0),
+						right_boundary = ((right + window_size < hi_c_mat.size())? (right + window_size):(hi_c_mat.size()-1));
+						result_del_cube[rep][chr - 1][del].score_list[6] = predict_HiC(hi_c_mat, hi_c_data_model_list, genomic_interaction_dist, left_boundary, left - 1, right + 1, right_boundary);	// corrected
+					}
+					else
+						result_del_cube[rep][chr - 1][del].score_list[6] = 0;
+					//del_cube[rep][chr - 1][del].score_list[6] = predict_HiC(hi_c_mat, hi_c_data_model_list, contact_prob_list, left_boundary, left, right, right_boundary);
+					//if (del_cube[rep][chr - 1][del].score_list[6] < 0)
+					//	cout << "Negative score " << del_cube[rep][chr - 1][del].left << "\t" << del_cube[rep][chr - 1][del].right << endl;
+	
+				}
+				conventional_estimate_fusion (result_del_cube[rep][chr-1], insulation_score_tad_mat[chr-1], 0);
+				conventional_count_fusion (result_del_cube[rep][chr-1], Armatus_tad_mat[chr-1], 1);
+				conventional_count_fusion (result_del_cube[rep][chr-1], CaTCH_tad_mat[chr-1], 2);
+				conventional_count_fusion (result_del_cube[rep][chr-1], Arrowhead_tad_mat[chr-1], 3);
+				for (int del = 0; del < result_del_cube[rep][chr - 1].size(); del++) {
+					// Sum
+					result_del_cube[rep][chr-1][del].score_list[4] = 0;
+					for (int t = 0; t < 4; t++) 
+						result_del_cube[rep][chr-1][del].score_list[4] += result_del_cube[rep][chr-1][del].score_list[t];
+					result_del_cube[rep][chr-1][del].score_list[5] = 0;
+					for (int ctcf = 0; ctcf < CTCF_mat[chr-1].size(); ctcf++)
+						if (CTCF_mat[chr-1][ctcf].left >= result_del_cube[rep][chr-1][del].left 
+							&& CTCF_mat[chr-1][ctcf].right <= result_del_cube[rep][chr-1][del].right)
+								result_del_cube[rep][chr-1][del].score_list[5]++;
+				}
+		
+			}		
+		}
+	}
+
+}
+
+void generate_TAD_fusion_score (string del_filename, int min_length, int max_length, string hi_c_folder, string model_folder, string tad_annotation_folder, string CTCF_filename, const Genomic_Interaction_Distribution& genomic_interaction_dist, int window_size, int sample_num, string print_prefix) {
+	SequenceMatrix del_mat;
+	read_sequence_list_file (del_filename, DELETION_FILE, min_length, max_length, del_mat);
+	// Sampling deletions
+	vector<SequenceMatrix> result_del_cube;
+	generate_TAD_fusion_score (del_mat, hi_c_folder, model_folder, tad_annotation_folder, CTCF_filename, genomic_interaction_dist, window_size, sample_num, result_del_cube);
+	if (sample_num <= 0) {
+		string out_filename = print_prefix + "_" + num_to_string(window_size) + "_primary.dat";
+		write_TAD_fusion_score_primary (result_del_cube[0], out_filename);
+	}
+	else {
+		string out_filename = print_prefix + "_" + num_to_string(window_size) + "_permutation_" + num_to_string(sample_num) + ".dat";
+		write_TAD_fusion_score_permutation(result_del_cube, out_filename);
+	}
+}
+
+void write_TAD_fusion_score_primary (const SequenceMatrix& del_mat, string filename) {
+	ofstream out_file(filename.c_str());
+	out_file << "#Chr\tLeft\tRight\tInsulation-score\tArmatus\tCaTCH\tArrowhead\tAgreement\tCTCF\tFusion-score" << endl;
+	for (int chr = 1; chr <= 23; chr++) {
+		string chr_name = ((chr < 23)? num_to_string(chr):"X");
+		for (int del = 0; del < del_mat[chr - 1].size(); del++) {
+			Sequence tmp = del_mat[chr - 1][del];
+			out_file << chr_name << "\t" << tmp.left << "\t" << tmp.right;
+			for (int k = 0; k < tmp.score_list.size(); k++)
+				out_file << "\t" << tmp.score_list[k];
+			out_file << endl;
+		}
+	}
+	out_file.close();
+}
+
+void write_TAD_fusion_score_permutation( const vector<SequenceMatrix>& del_cube, string filename) {
+	ofstream out_file(filename.c_str());
+	out_file << del_cube.size() << endl;
+	for (int rep = 0; rep < del_cube.size(); rep++) {
+		for (int chr = 0; chr < 23; chr++)
+			for (int del = 0; del < del_cube[rep][chr].size(); del++) {
+				out_file << del_cube[rep][chr][del].score_list[0];
+				out_file << "\t" << del_cube[rep][chr][del].score_list[1];
+				out_file << "\t" << del_cube[rep][chr][del].score_list[2];
+				out_file << "\t" << del_cube[rep][chr][del].score_list[3];
+				out_file << "\t" << del_cube[rep][chr][del].score_list[6];
+				out_file << endl;
+			}
+	}
+	out_file.close();	
+}
+
+void read_TAD_fusion_score_permutation (string filename, const SequenceMatrix& primary_fusion_score_mat, vector<SequenceMatrix>& fusion_score_cube) {
+	ifstream in_file(filename.c_str());
+	int sample_num;
+	in_file >> sample_num;
+	fusion_score_cube.resize(sample_num);
+	for (int sample = 0; sample < sample_num; sample++) {
+		fusion_score_cube[sample].resize(23);
+		for (int chr = 0; chr < 23; chr++) {
+			fusion_score_cube[sample][chr].resize(primary_fusion_score_mat[chr].size());
+			for (int del = 0; del < primary_fusion_score_mat[chr].size(); del++) {
+				fusion_score_cube[sample][chr][del].score_list.resize(5);
+				for (int k = 0; k < 5; k++)
+					in_file >> fusion_score_cube[sample][chr][del].score_list[k];
+			}
+		}
+	}
+	in_file.close();
+}
+
+double find_fusion_score_sum(const SequenceMatrix& del_mat, int score_col_index) {
+	double sum = 0;
+	for (int chr = 0; chr < 23; chr++)
+		for (int del = 0; del < del_mat[chr].size(); del++)
+			sum += del_mat[chr][del].score_list[score_col_index];
+	return sum;
+}
+
+
+// Only interactions that have the length <= max_length_in_obj will contribute to the obj function
+void fit_hi_c_data_model (const ValueMatrix& hi_c_mat, int left, int right, int max_length_in_obj, HiCDataModel& hi_c_data_model, bool print_solver_status) {
+	//cout << hi_c_mat.size() << "\t" << left << "\t" << right << endl;
+	CPXENVptr env = NULL;
+	CPXLPptr lp = NULL;
+
+	//int min_length_in_obj = 2;
+	int length = right - left + 1;
+	int alpha_size = length;
+	int beta_size = 1;
+	int e_size = ((length > max_length_in_obj)? ((length - max_length_in_obj)*max_length_in_obj + max_length_in_obj*(max_length_in_obj - 1)/2) : (length*(length - 1)/2));	// slack
+	//e_size = e_size - (length - min_length_in_obj + 1)*(min_length_in_obj - 1) - (min_length_in_obj - 1)*(min_length_in_obj - 2)/2;
+	int r_size = length;	// resistance
+
+	int var_num = alpha_size + beta_size + e_size + r_size; 
+	int status = 0;
+	env = CPXopenCPLEX (&status);
+	// Turn on output to the screen 
+	status = CPXsetintparam (env, CPXPARAM_ScreenOutput, (print_solver_status? CPX_ON:CPX_OFF));
+	// Turn on data checking 
+	status = CPXsetintparam (env, CPXPARAM_Read_DataCheck, CPX_ON);
+	//status = CPXsetintparam (env, CPX_PARAM_LPMETHOD, CPX_ALG_BARRIER);
+	// Create the problem 
+	lp = CPXcreateprob (env, &status, "linear_model");
+	// Populate the problem
+	// Problem is minimization
+	status = CPXchgobjsen (env, lp, CPX_MIN);
+	// For obj and bounds
+	double* obj = (double*) malloc(var_num*sizeof(double));
+	double* lb = (double*) malloc(var_num*sizeof(double));
+	double* ub = (double*) malloc(var_num*sizeof(double));
+	char** colname = (char**) malloc(var_num*sizeof(char*));
+	
+	int  current_id = 0;
+	// alpha
+	for (int i = 0; i < alpha_size; i++) {
+		lb[current_id] = -CPX_INFBOUND;
+		ub[current_id] = CPX_INFBOUND;
+		//lb[current_id] = log(hi_c_mat[left + i][left + i]);
+		//ub[current_id] = log(hi_c_mat[left + i][left + i] + 1e-10);
+
+		colname[current_id] = (char*) malloc(50*sizeof(char));
+		sprintf(colname[current_id], "a_%i\0", i);
+		obj[current_id] = 0;
+		current_id++;
+	}
+	// beta
+	//lb[current_id] = -2;
+	//ub[current_id] = -1;
+	lb[current_id] = -2;
+	ub[current_id] = -0.1;
+	
+	colname[current_id] = (char*) malloc(50*sizeof(char));
+	sprintf(colname[current_id], "beta\0");
+	obj[current_id] = 0;
+	current_id++;
+	// slack
+	int tmp = current_id;
+	int cell_num_tmp = 0;
+	for (int i = 0; i < length; i++) {
+		int max_i = ((i + max_length_in_obj < length)? (i + max_length_in_obj):(length-1));
+		//for (int j = i + min_length_in_obj; j <= max_i; j++) {
+		for (int j = i + 1; j <= max_i; j++) {
+			lb[current_id] = 0;
+			ub[current_id] = CPX_INFBOUND;
+			colname[current_id] = (char*) malloc(50*sizeof(char));
+			sprintf(colname[current_id], "e_%i,%i\0", i, j);
+			obj[current_id] = 1;
+			current_id++;
+			cell_num_tmp += (4 + j - i - 1);
+		}
+	}
+	cout << "#Var " << current_id - tmp << "\t" << e_size << endl;
+	// resistance
+	for (int i = 0; i < length; i++) {
+		lb[current_id] = 0;
+		ub[current_id] = CPX_INFBOUND;
+		colname[current_id] = (char*) malloc(50*sizeof(char));
+		sprintf(colname[current_id], "r_%i\0", i);
+		obj[current_id] = 0;
+		current_id++;
+	}
+	// Obj and the bound
+	status = CPXnewcols (env, lp, var_num, obj, lb, ub, NULL, colname);
+	if (status) {
+		cout << "LINH: Fail to set up (bound and obj) the LP problem!" << endl;
+		cout << "(left,right) = " << left << "\t" << right << endl;
+	}
+	//else 
+	//	cout << "LINH: Add all variables successfully!" << endl;
+	// Add constraints
+	int row_num = 2*e_size;
+	int cell_num = 2*cell_num_tmp;
+	int* rmatbeg = (int*) malloc(row_num*sizeof(int));
+	int* rmatind = (int*) malloc(cell_num*sizeof(int));
+	double* rmatval = (double*) malloc(cell_num*sizeof(double));
+	double* rhs = (double*) malloc(row_num*sizeof(double));
+	char* sense = (char*) malloc(row_num*sizeof(char));
+	char** rowname = (char**) malloc(row_num*sizeof(char*));
+	
+	int current_row_id = 0;
+	int current_cell_id = 0;
+	cout << "Total: " << length << endl;
+	for (int i = 0; i < length; i++) {
+		int j_max = ((i + max_length_in_obj < length)? (i + max_length_in_obj):(length-1));
+		//if (i > n - 10)
+		//	cout << i << endl;
+		//for (int j = i + min_length_in_obj; j <= j_max; j++) {
+		for (int j = i + 1; j <= j_max; j++) {
+			double logH = ((hi_c_mat[left + i][left + j] > 0)? log(hi_c_mat[left + i][left + j]) : log(ZERO));
+			// (a_i + a_j)/2 + beta*log(d_ij) - sum(r_k) - e_ij <= log(H_ij)
+			rmatbeg[current_row_id] = current_cell_id;
+			sense[current_row_id] = 'L';
+			rhs[current_row_id] = logH;
+			rowname[current_row_id] = (char*) malloc(20*sizeof(char));
+			sprintf(rowname[current_row_id], "e_%i,%i\0", i, j);
+			rmatind[current_cell_id] = i;
+			rmatval[current_cell_id] = 0.5;
+			rmatind[current_cell_id + 1] = j;
+			rmatval[current_cell_id + 1] = 0.5;
+			rmatind[current_cell_id + 2] = alpha_size;
+			rmatval[current_cell_id + 2] = log(j - i);
+			rmatind[current_cell_id + 3] = alpha_size + 1 + round(current_row_id/2);
+			rmatval[current_cell_id + 3] = -1;
+			for (int k = i + 1; k < j; k++) {
+				rmatind[current_cell_id + 3 + k - i] = alpha_size + 1 + e_size + k;
+				rmatval[current_cell_id + 3 + k - i] = -1; 
+			}
+			current_row_id++;
+			current_cell_id += 3 + (j-i);
+			// -(a_i + a_j)/2 - beta*log(d_ij) + sum(r_k) - e_ij <= -log(H_ij)
+			rmatbeg[current_row_id] = current_cell_id;
+			sense[current_row_id] = 'L';
+			rhs[current_row_id] = -logH;
+			rowname[current_row_id] = (char*) malloc(20*sizeof(char));
+			sprintf(rowname[current_row_id], "e_%i,%i\0", i, j);
+			rmatind[current_cell_id] = i;
+			rmatval[current_cell_id] = -0.5;
+			rmatind[current_cell_id + 1] = j;
+			rmatval[current_cell_id + 1] = -0.5;
+			rmatind[current_cell_id + 2] = alpha_size;
+			rmatval[current_cell_id + 2] = -log(j - i);
+			rmatind[current_cell_id + 3] = alpha_size + 1 + round(current_row_id/2);
+			rmatval[current_cell_id + 3] = -1;
+			for (int k = i + 1; k < j; k++) {
+				rmatind[current_cell_id + 3 + k - i] = alpha_size + 1 + e_size + k;
+				rmatval[current_cell_id + 3 + k - i] = 1; 
+			}
+			current_row_id++;
+			current_cell_id += 3 + (j-i);
+		}
+	}
+	//cout << "Estimate: " << row_num << "\t" << cell_num << endl;
+	//cout << "Iterate: " << current_row_id << "\t" << current_cell_id << endl;
+	
+	//status = CPXaddrows (env, lp, 0, row_num, cell_num, rhs, sense, rmatbeg, rmatind, rmatval, NULL, rowname);
+	status = CPXaddrows (env, lp, 0, current_row_id, current_cell_id, rhs, sense, rmatbeg, rmatind, rmatval, NULL, rowname);
+	if (status) {
+		cout << "LINH: Fail to add constraints to LP problem!" << endl;
+		//for (int i = 0; i < var_num; i++)
+		//	cout << i << "\t" << lb[i] << "\t" << ub[i] << "\t" << obj[i] << "\t" << colname[i] << endl;
+		//cout << "=============================" << endl;
+		//for (int i = 0; i < current_row_id; i++)
+		//	cout << i << "\t" << "rmatbeg: " << rmatbeg[i] << "\tsense: " << sense[i] << "\trhs: " << rhs[i] << "\t" << rowname[i] << endl;
+		//for (int i = 0; i < current_cell_id; i++)
+		//	cout << i << "\t" << "rmatind: " << rmatind[i] << "\t rmatval: " << rmatval[i] << endl;		
+	}
+	else {
+		//cout << "LINH: Add all constraints successfully!" << endl;
+	}	
+	// Solve the problem
+	time_t start, end;
+	start = clock();
+
+	status = CPXlpopt (env, lp); 
+	
+	end = clock();
+	double total_time = (double)( end - start )/(double)CLOCKS_PER_SEC;
+	if (print_solver_status)
+		printf( "\t\t\tElapsed time : %0.3f \n", total_time );
+
+
+	// Get the actual size of the problem
+	int cur_numrows = CPXgetnumrows (env, lp);
+	int cur_numcols = CPXgetnumcols (env, lp);
+	double* x = (double*) malloc (cur_numcols*sizeof(double));
+	double* slack = (double*) malloc (cur_numrows*sizeof(double));
+	double* dj = (double*) malloc (cur_numcols*sizeof(double));
+	double* pi = (double*) malloc (cur_numrows*sizeof(double));
+	int solstat;
+	double objval;
+	// Get the solution
+	//status = CPXwriteprob (env, lp, "linear_model.lp", NULL);
+	status = CPXsolution (env, lp, &solstat, &objval, x, pi, slack, dj);
+	if (status)
+		cout << "LINH: Fail to solve the LP problem!" << endl;
+	else {
+		if (print_solver_status)
+			cout << "LINH: Final obj value = " << objval << endl;
+		//for (int i = 0; i < var_num; i++)
+		//	cout << colname[i] << "\t" << x[i] << endl;
+	}
+	
+	// Export the prediction
+	hi_c_data_model.left = left;
+	hi_c_data_model.beta = x[alpha_size];
+	cout << "Beta_2 = " << x[alpha_size] << endl;
+	resize_and_fill(hi_c_data_model.alpha, length, 0);
+	resize_and_fill(hi_c_data_model.resistance, length, 0);
+	for (int i = 0; i < length; i++) {
+		hi_c_data_model.alpha[i] = x[i];
+		hi_c_data_model.resistance[i] = x[alpha_size + 1 + e_size + i];
+	}
+
+	// Free the problem
+	CPXfreeprob(env, &lp);
+	// Free the environment
+	CPXcloseCPLEX (&env);
+	// Free all memory
+	free(obj);
+	free(ub);
+	free(lb);
+	for (int i = 0 ; i < var_num; i++)
+		free(colname[i]);
+	free(colname);
+	free(x);
+	free(slack);
+	free(dj);
+	free(pi);
+	free(rmatbeg);
+	free(rmatind);
+	free(rmatval);
+	free(rhs);
+	free(sense);
+	for (int i = 0; i < current_row_id; i++)
+		free(rowname[i]);
+	free(rowname);	
+}
+
+ValueList predict_HiC (const ValueMatrix& hi_c_mat_wt, const ValueMatrix& hi_c_mat_mut, const HiCDataModel& hi_c_data_model, const Genomic_Interaction_Distribution& genomic_interaction_dist, int left_1, int right_1, int left_2, int right_2, string print_prefix) {	
+	if (left_1 >= right_1 || left_2 >= right_2 || right_1 >= left_2) {
+		cout << "ERROR: The left reigon & the right region must be large and not overlapped!" << endl;
+		cout << "(left_1, right_1, left_2, right_2) = " << left_1 << "\t" << right_1 << "\t" << left_2 << "\t" << right_2 << endl;
+	}
+
+	int length = right_2 - left_1 + 1;
+	// Export the prediction
+	int index_shift = left_1 - hi_c_data_model.left;
+	int length_1 = right_1 - left_1 + 1, length_2 = right_2 - left_2 + 1;
+	ValueList pred, old, obs, norm_pred, norm_old;
+	for (int i = 0; i < length_1; i++) {
+		for (int j = 0; j < length_2; j++) {
+			int pos_i = left_1 + i, pos_j = left_2 + j;
+			int i_new = i, j_new = j + left_2 - left_1;		
+			
+			double alpha_i = hi_c_data_model.alpha[i_new + index_shift], alpha_j = hi_c_data_model.alpha[j_new + index_shift];
+			double alpha_ij_2 = (alpha_i + alpha_j)/2;
+			// Distance from bin i-th to bin j-th is j - i
+			double log_pred = alpha_ij_2 + hi_c_data_model.beta*log(length_1 - i + j);	// new distance = length_1 - 1 - i + j + 1
+			double log_old = alpha_ij_2 + hi_c_data_model.beta*log(length_1 - i + j + left_2 - right_1 - 1);
+			//for (int k = i + 1; k < right_1 - left_1; k++)
+			double del_resistance = 0;
+			for (int k = i + 1; k <= right_1 - left_1; k++)
+				del_resistance += hi_c_data_model.resistance[k + index_shift];
+			//for (int k = 1; k < j; k++)
+			for (int k = 0; k < j; k++)
+				del_resistance += hi_c_data_model.resistance[left_2 - left_1 + k + index_shift];
+			double total_resistance = del_resistance;
+			for (int k = 1; k < left_2 - right_1; k++)
+				total_resistance += hi_c_data_model.resistance[right_1 - left_1 + k + index_shift];
+
+			pred.push_back(exp(log_pred - del_resistance));
+			old.push_back(hi_c_mat_wt[pos_i][pos_j]);
+			obs.push_back(hi_c_mat_mut[pos_i][pos_j]);
+			if (alpha_i >= 0 && alpha_j >= 0) {
+				norm_pred.push_back(exp(log_pred - del_resistance - alpha_ij_2));
+				norm_old.push_back(exp(log_old - total_resistance - alpha_ij_2));
+			}
+			else {
+				norm_pred.push_back(0);
+				norm_old.push_back(0);
+			}
+			//cout << i << "\t" << j << "\t" << exp(alpha_i/2) << "\t" << exp(alpha_j/2) << endl;
+		}		
+	}
+	double mean_exp = 0, max_exp = 0;
+	if (!print_prefix.empty()) {
+		// For plotting
+		ofstream plot_file;
+		bool is_write_file = (print_prefix.compare("DO_NOT_WRITE_A_FILE") != 0);
+		if (is_write_file) {
+			string plot_filename = print_prefix + "_plot_remodel.dat";
+			plot_file.open(plot_filename.c_str());
+		}
+		int resolution = 20000;
+		if (is_write_file)
+			plot_file << "#" << left_1*resolution/1000000.0 << "\t" << right_2*resolution/1000000.0 << endl;
+		double max_old = 0, sum_old = 0.0, max_pred = 0, sum_pred = 0.0, max_obs = 0, sum_obs = 0.0, n = 0;
+		for (int i = left_1; i <= right_2; i++)
+			for (int j = left_1; j <= right_2; j++) {				
+				if (i != left_1 || j != left_1)
+					if (is_write_file)
+						plot_file << endl;
+				if (is_write_file)
+					plot_file << (i*resolution)/1000000.0 << "\t" << (j*resolution)/1000000.0 << "\t" << hi_c_mat_wt[i][j] << "\t" << hi_c_mat_mut[i][j];
+				double pred_tmp;
+				if ((i <= right_1 && j <= right_1) || (i >= left_2 && j >= left_2))
+					pred_tmp = hi_c_mat_wt[i][j];
+				else if ((i > right_1 && i < left_2) || (j > right_1 && j < left_2))
+					pred_tmp = 0;
+				else if (i <= right_1 && j >= left_2) {
+					pred_tmp = pred[(i - left_1)*(right_2 - left_2 + 1) + j - left_2]; 
+				
+					n++;
+					sum_old += hi_c_mat_wt[i][j];
+					if (max_old < hi_c_mat_wt[i][j])
+						max_old = hi_c_mat_wt[i][j];
+					sum_pred += pred_tmp;
+					if (max_pred < pred_tmp)
+						max_pred = pred_tmp;
+					sum_obs += hi_c_mat_mut[i][j];
+					if (max_obs < hi_c_mat_mut[i][j])
+						max_obs = hi_c_mat_mut[i][j];			
+				}
+				else if (i >= left_2 && j <= right_1) 
+					pred_tmp = pred[(j - left_1)*(right_2 - left_2 + 1) + i - left_2];
+				else 
+					cout << "ERROR: Can not print for that case! " << i << "\t" << j 
+						<< "\t" << left_1 << "\t" << right_1 << "\t" << left_2 << "\t" << right_2 << endl;
+				if (is_write_file)
+					plot_file << "\t" << pred_tmp << "\t" << pred_tmp - hi_c_mat_mut[i][j];
+		
+			}
+		if (is_write_file) {
+			plot_file << endl << "#\t\t" << max_old << "\t" << max_obs << "\t" << max_pred;
+			plot_file << "#n = " << n << " vs " << norm_old.size() << " vs " << right_1 - left_1 + 1 << " x " << right_2 - left_2 + 1 << endl;
+ 			plot_file << endl << "#\t\t" << sum_old/n << "\t" << sum_obs/n << "\t" << sum_pred/n; 
+			plot_file.close();
+		}
+		mean_exp = sum_obs/n;
+		max_exp = max_obs; 
+		// For debugging the score
+		if (!genomic_interaction_dist.freq_distribution.empty() && is_write_file) {
+			string score_filename = print_prefix + "_score.dat";
+			ofstream score_file(score_filename.c_str());
+			int index = 0;
+			for (int i = 0; i < length_1; i++)
+				for (int j = 0; j < length_2; j++) {
+				double old_p = genomic_interaction_dist.get_prob(norm_old[index]),  
+					new_p = genomic_interaction_dist.get_prob(norm_pred[index]);
+					score_file << i + left_1 << "\t" << j + left_2 << "\t" << old[index] << "\t" << pred[index] 
+						<< "\t" << norm_old[index] << "\t" << norm_pred[index]
+						//<< "\t" << old_p << "\t" << ((new_p < old_p)? old_p:new_p) << endl;
+						<< "\t" << old_p << "\t" << new_p << endl;
+					index++;
+				}
+			score_file.close();
+		}
+	}
+
+	double fusion_score = 0;
+	if (!genomic_interaction_dist.freq_distribution.empty()) {
+		for (int i = 0; i < norm_old.size(); i++) {
+			double old_p = genomic_interaction_dist.get_prob(norm_old[i]),  
+				new_p = genomic_interaction_dist.get_prob(norm_pred[i]);
+			fusion_score += (new_p - old_p);	// corrected			
+		}
+	}
+
+	ValueList tmp;
+	tmp.push_back(PCC(pred, obs, ZERO));
+	tmp.push_back(average_log_ratio(pred, obs, ZERO));
+	tmp.push_back(L1(pred, obs));
+	tmp.push_back(L2(pred, obs));
+	tmp.push_back(fusion_score);
+	tmp.push_back(max_exp);
+	tmp.push_back(mean_exp);
+	return tmp;
+}
+
+double predict_HiC (const ValueMatrix& hi_c_mat, const HiCDataModelList& hi_c_data_model_list, const Genomic_Interaction_Distribution& genomic_interaction_dist, int left_1, int right_1, int left_2, int right_2, string print_prefix) {
+	if (left_1 >= right_1 || left_2 >= right_2) {
+		cout << "ERROR: Can not predict because the left reigon or the right region is so small!" << endl;
+		cout << left_1 << "\t" << right_1 << "\t" << left_2 << "\t" << right_2 << endl;
+		return -1e6;
+	}
+	for (int k = 0; k < hi_c_data_model_list.size(); k++) {
+		if (left_1 >= hi_c_data_model_list[k].left && left_2 >= right_1 && right_2 <= hi_c_data_model_list[k].get_right()) {
+			ValueList result = predict_HiC (hi_c_mat, hi_c_mat, hi_c_data_model_list[k], genomic_interaction_dist, 
+				left_1, right_1, left_2, right_2, print_prefix);	
+			return result[4];
+		}
+	}	
+	cout << "Error: Can not find the Hi-C data model! " << left_1 << "\t" << right_1 << "\t" << left_2 << "\t" << right_2 << endl;
+	return -1e6;
+}
+
+ValueList predict_HiC (const ValueMatrix& hi_c_mat_wt, const ValueMatrix& hi_c_mat_mut, int left_1, int right_1, int left_2, int right_2, int max_length, const Genomic_Interaction_Distribution& genomic_interaction_dist, string print_prefix) {
+	if (left_1 >= right_1 || left_2 >= right_2 || right_1 > left_2) {
+		cout << "ERROR: The left reigon & the right region must be large and not overlapped!" << endl;
+		cout << "(left_1, right_1, left_2, right_2) = " << left_1 << "\t" << right_1 << "\t" << left_2 << "\t" << right_2 << endl;
+	}
+
+	HiCDataModel hi_c_data_model;
+	fit_hi_c_data_model(hi_c_mat_wt, left_1, right_2, max_length, hi_c_data_model, false);
+	cout << "Finish training " << endl;
+
+	return predict_HiC (hi_c_mat_wt, hi_c_mat_mut, hi_c_data_model, genomic_interaction_dist,
+		left_1, right_1, left_2, right_2, print_prefix);
+}
+
+ValueList length_based_model_prediction (const ValueMatrix& hi_c_mat_wt, const ValueMatrix& hi_c_mat_mut, int left_1, int right_1, int left_2, int right_2, string print_filename) {
+	int max_length = (right_1 - left_1 > right_2 - left_2)? (right_1 - left_1):(right_2 - left_2);
+	vector<DistributionSummary> dist_sum_list(max_length + 1);
+	for (int length = 1; length <= right_1 - left_1; length++)
+		for (int pos = left_1; pos + length <= right_1; pos++)
+			dist_sum_list[length].add_value(hi_c_mat_wt[pos][pos + length]);
+	for (int length = 1; length <= right_2 - left_2; length++)
+		for (int pos = left_2; pos + length <= right_2; pos++)
+			dist_sum_list[length].add_value(hi_c_mat_wt[pos][pos + length]);
+	
+	ValueList x,y;
+	for (int i = 1; i <= max_length; i++) {
+		x.push_back(log(i));
+		y.push_back(log((dist_sum_list[i].mean > 0)? dist_sum_list[i].mean:ZERO));
+	}
+	double a,b;
+	line_LQ(x, y, a, b);
+
+	//cout << "(a,b)" << a << "\t" << b << endl;
+
+	ValueMatrix pred_mat(right_1 - left_1 + 1), obs_mat(right_1 - left_1 + 1);
+	ValueList obs, pred;
+	for (int i = left_1; i <= right_1; i++) {
+		for (int j = left_2; j <= right_2; j++) {
+			double obs_val = hi_c_mat_mut[i][j];
+			double log_ij = log(right_1 - i + j - left_2 + 1);
+			double pred_val = exp(a*log_ij + b);
+			obs.push_back(obs_val);
+			pred.push_back(pred_val);
+			pred_mat[i - left_1].push_back(pred_val);
+			obs_mat[i - left_1].push_back(obs_val);
+		}
+	}
+
+	if (!print_filename.empty()) {
+		ofstream out_file(print_filename.c_str());
+		for (int i = 0; i < pred_mat.size(); i++)
+			for (int j = 0; j < pred_mat[i].size(); j++)
+				out_file << i << "\t" << j << "\t" << obs_mat[i][j] << "\t" << pred_mat[i][j] << endl;
+		out_file.close();
+	}
+
+	//cout << "Naive list size " << pred.size() << "\t" << obs.size() << endl;
+	ValueList tmp;
+	tmp.push_back(PCC(pred, obs, ZERO));
+	tmp.push_back(average_log_ratio(pred, obs, ZERO));
+	tmp.push_back(L1(pred, obs));
+	tmp.push_back(L2(pred, obs));
+	return tmp;
+}
+
+void conventional_count_fusion (SequenceList& del_list, const SequenceList& tad_list, int score_index, bool is_printed) {
+	for (int k = 0; k < del_list.size(); k++) {
+		bool is_covered_left = false, is_covered_right = false;
+		for (int i = 0; i < tad_list.size(); i++)
+			if (del_list[k].left >= tad_list[i].left && del_list[k].left <= tad_list[i].right && del_list[k].right >= tad_list[i].right) {
+					is_covered_left = true;
+					break;
+			}
+		for (int i = 0; i < tad_list.size(); i++)
+			if (del_list[k].left <= tad_list[i].left && del_list[k].right >= tad_list[i].left && del_list[k].right <= tad_list[i].right) {
+					is_covered_right = true;
+					break;
+			}
+		del_list[k].score_list[score_index] = ((is_covered_left && is_covered_right)? 1:0);
+		if (is_printed && is_covered_left && is_covered_right)
+			cout << del_list[k].left << "\t" << del_list[k].right << endl;		
+	}	
+}
+
+void conventional_estimate_fusion (SequenceList& del_list, const SequenceList& tad_boundary_list, int score_index, bool is_printed) {	
+	for (int k = 0; k < del_list.size(); k++) {
+		double fusion_score = 0;
+		for (int i = 0; i < tad_boundary_list.size(); i++)
+			if ((del_list[k].left >= tad_boundary_list[i].left && del_list[k].left <= tad_boundary_list[i].right && del_list[k].right >= tad_boundary_list[i].right) 
+				|| (del_list[k].right >= tad_boundary_list[i].left && del_list[k].right <= tad_boundary_list[i].right && del_list[k].left <= tad_boundary_list[i].left) 
+				|| (del_list[k].left <= tad_boundary_list[i].left && del_list[k].right >= tad_boundary_list[i].right)) { 
+					if (fusion_score < tad_boundary_list[i].score_list[0])
+						fusion_score = tad_boundary_list[i].score_list[0];
+			}
+		del_list[k].score_list[score_index] = fusion_score;
+		if (is_printed && fusion_score > 0.5)
+			cout << del_list[k].left << "\t" << del_list[k].right << endl;
+	}	
+}
+
+void deletion_filter (SequenceMatrix& original_del_mat, const SequenceMatrix& filter_del_mat) {
+	for (int chr = 0; chr < original_del_mat.size(); chr++) {
+		//for (int l = 0; l < filter_del_mat[chr].size(); l++)
+		//	cout << chr + 1 << "\t" << filter_del_mat[chr][l].left << "\t" << filter_del_mat[chr][l].right << endl; 
+		SequenceList tmp;
+		for (int del = 0; del < original_del_mat[chr].size(); del++) {
+			bool is_repeated = false;
+			for (int k = 0; k < filter_del_mat[chr].size(); k++) {
+				//if (original_del_mat[chr][del].left == filter_del_mat[chr][k].left && original_del_mat[chr][del].right == filter_del_mat[chr][k].right) {
+				//	is_repeated = true;
+				//	break;
+				//}
+				int left_intersection = -1, right_intersection = -1;
+				if (original_del_mat[chr][del].left >= filter_del_mat[chr][k].left && original_del_mat[chr][del].left <= filter_del_mat[chr][k].right)
+					left_intersection = original_del_mat[chr][del].left;
+				if (filter_del_mat[chr][k].left >= original_del_mat[chr][del].left && filter_del_mat[chr][k].left <= original_del_mat[chr][del].right)
+					left_intersection = filter_del_mat[chr][k].left;
+				if (original_del_mat[chr][del].right >= filter_del_mat[chr][k].left && original_del_mat[chr][del].right <= filter_del_mat[chr][k].right)
+					right_intersection = original_del_mat[chr][del].right;
+				if (filter_del_mat[chr][k].right >= original_del_mat[chr][del].left && filter_del_mat[chr][k].right <= original_del_mat[chr][del].right)
+					right_intersection = filter_del_mat[chr][k].right;
+				int intersection_length = right_intersection - left_intersection,
+					original_del_length = original_del_mat[chr][del].right - original_del_mat[chr][del].left,
+					filter_del_length = filter_del_mat[chr][k].right - filter_del_mat[chr][k].left;
+
+				//if (original_del_mat[chr][del].left == filer_del_mat[chr][
+				if (intersection_length + 1000 > original_del_length && intersection_length + 1000 > filter_del_length) {
+					is_repeated = true;
+					break;
+				}
+			}
+			if (!is_repeated)
+				tmp.push_back(original_del_mat[chr][del]);
+		}
+		//cout << chr << "\t" << original_del_mat[chr].size() << "\t" << tmp.size() << endl;
+		original_del_mat[chr] = tmp;
+	}
+}
+
+void deletion_filter (SequenceMatrix& original_del_mat, int max_del_length) {
+	for (int chr = 0; chr < original_del_mat.size(); chr++) {
+		SequenceList tmp;
+		for (int del = 0; del < original_del_mat[chr].size(); del++) {
+			if (original_del_mat[chr][del].right - original_del_mat[chr][del].left <= max_del_length)
+				tmp.push_back(original_del_mat[chr][del]);
+		}
+		//cout << chr << "\t" << original_del_mat[chr].size() << "\t" << tmp.size() << endl;
+		original_del_mat[chr] = tmp;
+	}
+}
+
+void extract_1KG_without_GM12878 (string One_KG_deletion_filename, string GM12878_variant_filename, int min_length, int max_length) {	
+	SequenceMatrix One_KG_del_mat, GM12878_del_mat;
+	read_sequence_list_file (One_KG_deletion_filename, DELETION_1KG_FILE, 10000, 10000000, One_KG_del_mat);
+	read_sequence_list_file (GM12878_variant_filename, DELETION_FILE, 10000, 10000000, GM12878_del_mat);
+	cout << "All 1KG deletions " << count(One_KG_del_mat) << endl;
+	cout << "GM12878 deletions " << count(GM12878_del_mat) << endl;
+	deletion_filter(One_KG_del_mat, GM12878_del_mat);
+	cout << "After removing GM12878 deletions " << count(One_KG_del_mat) << endl;
+	string filename = "1KG_without_GM12878_" + num_to_string(min_length) + "_" + num_to_string(max_length) + ".dat";
+	ofstream out_file(filename.c_str());
+	for (int chr = 1; chr <= 23; chr++)
+		for (int del = 0; del < One_KG_del_mat[chr - 1].size(); del++) {
+			string chr_name = "chr" + ((chr < 23)? num_to_string(chr):"X");
+			int length = One_KG_del_mat[chr - 1][del].right - One_KG_del_mat[chr - 1][del].left + 1;
+			if (length >= min_length && length <= max_length)
+	 			out_file << chr_name << "\t" << One_KG_del_mat[chr - 1][del].left << "\t" << One_KG_del_mat[chr - 1][del].right << endl;
+		}
+	out_file.close();
+}
+
+void print_distribution(int max_loop_length, int resolution) {
+	SequenceMatrix loop_mat;
+	string loop_filename = "/share/hormozdiarilab/Data/HiC/Interaction_Data/GSE63525_GM12878_primary+replicate_HiCCUPS_looplist.txt"; 
+	//read_Rao_loop_file(loop_filename, max_loop_length, loop_mat);
+	read_sequence_list_file (loop_filename, RAO_LOOP_FILE, 20*resolution, max_loop_length, loop_mat);
+
+	string model_folder = "/share/hormozdiarilab/Data/HiC/Model/GM12878/ReModel/";
+	string raw_data_file_folder = "/share/hormozdiarilab/Data/HiC/GM12878_combined/5kb_resolution_intrachromosomal/chr" ;	
+	int max_loop_bin_length = round(max_loop_length/resolution);
+
+	ExplicitDistribution genomic_contact_dist, all_dist;
+
+	int chr_min = 1, chr_max = 23, round_factor = 500;
+	for (int chr = chr_min; chr <= chr_max; chr++) {
+		string chr_name = ((chr < 23)? num_to_string(chr):"X");
+	
+		HiCDataModelList hi_c_data_model_list;
+		read_hi_c_data_model_list(model_folder + "chr" + chr_name + ".model", hi_c_data_model_list);
+
+		string chr_raw_data_filename = raw_data_file_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved"; 
+
+		ValueMatrix hi_c_mat, mark_mat;
+		read_hi_c_data(chr_raw_data_filename, RESOLUTION, hi_c_mat);
+		mark_mat.resize(hi_c_mat.size());
+		for (int i = 0; i < hi_c_mat.size(); i++) 
+			resize_and_fill(mark_mat[i], max_loop_bin_length + 1, 0);
+	
+
+		int loop_num = 0;
+		ValueList covered_model_id_list(hi_c_mat.size(), -1);
+		for (int loop = 0; loop < loop_mat[chr - 1].size(); loop++) {
+			int left = round(loop_mat[chr - 1][loop].left/resolution);
+			int right = round(loop_mat[chr - 1][loop].right/resolution);
+			
+			//cout << left << "\t" << right << endl;		
+
+			int max_shift = -1, covered_model_id = -1;
+			for (int k = 0; k < hi_c_data_model_list.size(); k++) {
+				int l = left - hi_c_data_model_list[k].left, r = hi_c_data_model_list[k].get_right() - right;
+				if (l >= 0 && r >= 0) {
+					int min_shift_left_right = ((l >= r)? l:r);
+					if (min_shift_left_right > max_shift) {
+						covered_model_id = k;
+						max_shift = min_shift_left_right;
+					}
+				}
+			}
+				
+			if (covered_model_id >= 0) {
+				loop_num++;
+				for (int i = left; i <= right; i++) {
+					if (i < hi_c_mat.size())
+						covered_model_id_list[i] = covered_model_id;
+					for (int j = i; j <= right; j++)
+						if (mark_mat[i][j - i] < 1) 
+							mark_mat[i][j - i] = 1;					
+				}
+			}		
+		}	
+		cout << "Chr " << chr << ", #loops = " << loop_mat[chr - 1].size() << ", #loops with length < " << max_loop_length << " & covered by the model: " << loop_num <<  endl;		
+		for (int i = 0; i < hi_c_mat.size(); i++)
+			for (int j = i; j < hi_c_mat.size(); j++)
+				if (j - i <= max_loop_bin_length && covered_model_id_list[i] >= 0 && covered_model_id_list[j] >= 0) {
+					double alpha_i = hi_c_data_model_list[covered_model_id_list[i]].get_alpha(i), 
+						alpha_j = hi_c_data_model_list[covered_model_id_list[j]].get_alpha(j);
+					double norm_freq = hi_c_mat[i][j]*exp(-(alpha_i + alpha_j)/2);
+					
+					//cout << norm_freq << "\t" << ((mark_mat[i][j - i] > 0)? 1:0) << endl;
+					if (norm_freq < 0)
+						cout << "ERROR: Norm contact freq can not be negative! " << norm_freq << endl;
+					if (norm_freq < 20) {
+						int rounded_freq = round(round_factor*norm_freq);
+						all_dist.add_value(round(rounded_freq));
+						if (mark_mat[i][j - i] > 0)
+							genomic_contact_dist.add_value(rounded_freq);
+					}
+					else {
+						if (mark_mat[i][j - i] < 1)
+							cout << "WARNING: Norm contact freq of an non-interaction pair is so large! " << i*resolution << "\t" << j*resolution << "\t" << norm_freq;
+					}
+				}
+
+	}
+	string pos_fix = "_chr_" + num_to_string(chr_min) + "_" + num_to_string(chr_max) + "_max_length_" + num_to_string(max_loop_length) + "_rounded_" + num_to_string(round_factor) + ".dat";
+	genomic_contact_dist.print_to_file("Debug/genomic_contact_distribution" + pos_fix);
+	all_dist.print_to_file("Debug/all_distribution" + pos_fix);
+	//top_restrict_all_dist.print_to_file("Debug/top_restrict_all_distribution_chr_" + num_to_string(chr) + ".dat");
+		
+	ValueList contact_prob_list;
+	int pos = 0;	
+	while (pos < all_dist.freq.size() && pos < genomic_contact_dist.freq.size() && all_dist.freq[pos] > 0) {
+		double r = max(genomic_contact_dist.freq[pos]/all_dist.freq[pos], (contact_prob_list.empty()? 0:contact_prob_list.back()));
+		contact_prob_list.push_back(r);
+		pos++;
+	};
+	write_a_value_list ("Debug/Rao_loop_contact_prob" + pos_fix, contact_prob_list);
+}
+
+void export_all_hi_c_model (int chr_min, int chr_max, int max_length_obj, int window_length, int shift_length, string model_file_folder) { // Origin: window length = 4Mb, shift length = 1Mb, max_length_obj = 0.5Mb
+	int hi_c_model_window_size = round(window_length/RESOLUTION);
+	int shift_size = round(shift_length/RESOLUTION);
+	// For generating Hi-C data model list
+	string data_file_folder = "/share/hormozdiarilab/Data/HiC/GM12878_combined/5kb_resolution_intrachromosomal/chr";
+	//string model_file_folder = "/share/hormozdiarilab/Data/HiC/Model/GM12878/";
+	for (int chr = chr_min; chr <= chr_max; chr++) { 
+		string chr_name = ((chr < 23)? num_to_string(chr):"X");
+		string chr_raw_data_filename = data_file_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved"; 
+		ValueMatrix hi_c_mat;
+		read_hi_c_data(chr_raw_data_filename, RESOLUTION, hi_c_mat);
+		export_hi_c_model_list (hi_c_mat, hi_c_model_window_size, shift_size, max_length_obj, 
+			model_file_folder + "chr" + chr_name + "_" + to_string(max_length_obj) + "_" + to_string(window_length) + "_" + to_string(shift_length) + ".model");
+		cout << "Complete generating Hi-C model of chromosome " << chr_name << endl;
+	}
+}
+
+void export_hi_c_model_list (const ValueMatrix& hi_c_mat, int window_size, int shift_length, int max_length, string filename) {
+	HiCDataModelList hi_c_data_model_list;
+	int current_left = 0;
+	while (current_left < hi_c_mat.size()) {
+		HiCDataModel hi_c_data_model;
+		int right_pos = (current_left + window_size < hi_c_mat.size())? (current_left + window_size): (hi_c_mat.size() - 1);
+		cout << hi_c_mat.size() << "\t" << current_left << "\t" << right_pos << endl;
+		fit_hi_c_data_model(hi_c_mat, current_left, right_pos, max_length, hi_c_data_model);
+		hi_c_data_model.left = current_left;
+		hi_c_data_model_list.push_back(hi_c_data_model);
+		current_left += shift_length;	// Correct here for the final version
+	}
+	write_hi_c_data_model_list(filename, hi_c_data_model_list);
+}
+
+int HiCDataModel::get_right() const {
+	return left + alpha.size() - 1;
+}
+
+double HiCDataModel::get_alpha(int bin_id) const {
+	if (bin_id < left || bin_id - left >= alpha.size())
+		cout << "ERROR: Try to access alpha from model with bin_id = " << bin_id << " while left = " << left << endl;
+	return alpha.at(bin_id - left);
+}
+
+void Genomic_Interaction_Distribution::load(string filename, int round_factor_) {
+	round_factor = round_factor_;
+	read_a_value_list (filename, 1, freq_distribution);
+}
+
+double Genomic_Interaction_Distribution::get_prob(double contact_freq) const {
+	int tmp = round(contact_freq*round_factor);
+	if (tmp >= freq_distribution.size())
+		return 1;
+	else
+		return freq_distribution[tmp];
+}
 
 void write_hi_c_data_model_list(string filename, const HiCDataModelList& hi_c_data_model_list) {
 	ofstream out_file(filename.c_str());
@@ -254,7 +1762,6 @@ void write_hi_c_data_model_list(string filename, const HiCDataModelList& hi_c_da
 	}
 	out_file.close();
 }
-
 void read_hi_c_data_model_list(string filename, HiCDataModelList& hi_c_data_model_list) {
 	ifstream in_file(filename.c_str());
 	if (in_file.is_open()) {		
@@ -296,177 +1803,89 @@ void read_hi_c_data_model_list(string filename, HiCDataModelList& hi_c_data_mode
 	}
 }
 
-string num_to_string (int n) {
-	stringstream ss;
-	ss << n;
-	return ss.str();
-}
+void read_sequence_list_file (string filename, int file_format, int min_length, int max_length, SequenceMatrix& seq_mat) {
+	IdList col_list;
+	int skipping_header_line_num, chr_name_format;
+	if (file_format == DELETION_FILE) {
+		col_list = {0, 1, 2};
+		skipping_header_line_num = 0;
+		chr_name_format = 1;	// i.e. chr1
+	}
+	else if (file_format == DELETION_1KG_FILE) {
+		col_list = {0, 1, 2};
+		skipping_header_line_num = 1;
+		chr_name_format = 1;	// i.e. chr1
+	}
+	else if (file_format == CTCF_FILE) {
+		col_list = {0, 1, 2};
+		skipping_header_line_num = 0;
+		chr_name_format = 1;	// i.e. chr1
+	}
+	else if (file_format == RAO_LOOP_FILE) {
+		col_list = {0, 1, 4};
+		skipping_header_line_num = 1;
+		chr_name_format = 0;	// i.e. 1
+	}
+	else if (file_format == JUICE_FILE) {
+		col_list = {0, 1, 2};
+		skipping_header_line_num = 1;
+		chr_name_format = 0;	// i.e. 1
+	}
+	else if (file_format == INSULATION_SCORE_FILE) {
+		col_list = {0, 1, 2, 3};
+		skipping_header_line_num = 0;
+		chr_name_format = 0;	// i.e. 1
+	}
+	else if (file_format == TAD_FUSION_SCORE_FILE) {
+		col_list = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+		skipping_header_line_num = 0;
+		chr_name_format = 0; 	// i.e. 1
 
-float max(double a, double b) {
-	return (a > b)? a:b;
-}
-
-float min(double a, double b) {
-        return (a < b)? a:b;
-}
-
-void resize_and_fill(ValueList& x, int n, int a) {
-	if (x.size() != n)
-		x.resize(n);
-	for (int i = 0; i < n; i++)
-		x[i] = a;
-}
-
-void read_a_value_list (string filename, ValueList& val_list) {
-	val_list.clear();
-	ifstream in_file(filename.c_str());
-	if (in_file.is_open()) {		
-		int line_num = 0;
-		for (string row; getline(in_file, row, ROW_DELIM); ) {
-			line_num++;
-			istringstream ss(row);
-			StringList record;
-			for (string field; getline(ss, field, FIELD_DELIM); )
-				record.push_back(field);
-			if (!record.empty() && !record[0].empty() && record[0][0] != '#') {
-				if (record.size() >= 1) 
-					val_list.push_back(strtod(record[0].c_str(), NULL));
-			}
-		}
-		cout << "File " << filename << ", #lines " << line_num << endl;
-		in_file.close();	
 	}
 	else {
-		cout << "Can not open file " << filename << endl;
+		cout << "Can not read the sequence list from file: Unkown file type " << file_format << endl;
 		return;
 	}
-}
 
-void sort_by_value (const ValueList& l, ValueList& sorted_index, ValueList& rank, bool is_asc) {
-        ValueList x;
-        for (int i = 0; i < l.size(); i++)
-                x.push_back(l[i]*(is_asc? 1:-1));
-        int n = x.size();
-        sorted_index.resize(n);
-        std::size_t tmp(0);
-        std::generate(std::begin(sorted_index), std::end(sorted_index), [&]{ return tmp++; });
-        std::sort(std::begin(sorted_index), std::end(sorted_index), [&](int i, int j) { // Sort min -> max
-                return (x[i] < x[j]);
-        });
-        rank.resize(n);
-        for (int i = 0; i < n; i++)
-                rank[sorted_index[i]] = i + 1;
-}
-
-void find_TAD_boundary_insulation_index (const ValueMatrix& mat, int resolution, int window_size, ValueList& index_list) {
-	ValueList tmp(mat.size(), 0), cell_num(mat.size(), 0);
-	tmp[0] = 0;
-	cell_num[0] = 0;
-	index_list.clear();
-	for (int i = 1; i < mat.size(); i++) {
-		int col_num = 0, row_num = 0;
-		double col = 0, row = 0;
-		for (int j = i - 2 - window_size; j <= i - 2; j++) {
-			if (j >= 0) {
-				col += mat[j][i];
-				col_num++;
-			}
-		}
-		for (int j = i + 1; j <= i + 1 + window_size; j++) {
-			if (j < mat.size()) {
-				row += mat[i-1][j];
-				row_num++;
-			}
-		}
-		tmp[i] = tmp[i-1] - col + row;
-		cell_num[i] = cell_num[i-1] - col_num + row_num;
-		index_list.push_back((cell_num[i] > 0)?tmp[i]/cell_num[i]:0);
-	}	
-}
-
-void read_deletion_mutation_file (string filename, int length_threshold, DeletionMatrix& del_matrix) {
+	seq_mat.resize(23);
 	IdMap chr_name_to_id;
-	del_matrix.resize(23);
 	for (int chr = 1; chr <= 23; chr++) {
-		string chr_name = "chr" + ((chr < 23)? num_to_string(chr):"X");
+		string chr_name;
+		if (chr_name_format == 1)
+			chr_name = "chr" + ((chr < 23)? num_to_string(chr):"X");
+		else
+			chr_name =  ((chr < 23)? num_to_string(chr):"X");
 		chr_name_to_id[chr_name] = chr - 1;
-		del_matrix[chr - 1].clear();
+		seq_mat[chr - 1].clear();
 	}
-
-	int del_num = 0;
-	ifstream in_file(filename.c_str());
-	if (in_file.is_open()) {		
-		int line_num = 0;
-		for (string row; getline(in_file, row, ROW_DELIM); ) {
-			line_num++;
-			istringstream ss(row);
-			StringList record;
-			for (string field; getline(ss, field, FIELD_DELIM); )
-				record.push_back(field);
-			if (!record.empty() && !record[0].empty() && record[0][0] != '#') {
-				if (record.size() >= 3) {
-					if (chr_name_to_id.find(record[0]) != chr_name_to_id.end()) {
-						Deletion del_tmp(atoi(record[1].c_str()), atoi(record[2].c_str()));
-						if (del_tmp.right - del_tmp.left >= length_threshold) 
-							del_matrix[chr_name_to_id[record[0]]].push_back(del_tmp);						
-					}
-					else
-						cout << "ERROR: Unknown chromosome of the deletion " << record[0] << "\t" << record[1] << "\t" << record[2] << endl;
-					//cout << record[0] << "\t" << record[1] << "\t" << record[2] << endl;
-					del_num++;								
+	StringMatrix str_mat;
+	read_a_table_file (filename, ROW_DELIM, FIELD_DELIM, '#', skipping_header_line_num, col_list, str_mat);
+	int seq_num = 0;
+	for (int i = 0; i < str_mat.size(); i++) {
+		if (str_mat[i].size() >= 3 && chr_name_to_id.find(str_mat[i][0]) != chr_name_to_id.end()) {
+			Sequence seq_tmp(atoi(str_mat[i][1].c_str()), atoi(str_mat[i][2].c_str()));
+			int length = seq_tmp.right - seq_tmp.left;
+			if (length >= min_length && length <= max_length) {
+				if (col_list.size() > 3) {
+					seq_tmp.score_list.resize(col_list.size() - 3);
+					for (int k = 0; k < col_list.size() - 3; k++)
+						seq_tmp.score_list[k] = stod(str_mat[i][k + 3].c_str());
 				}
-			}
+				seq_mat[chr_name_to_id[str_mat[i][0]]].push_back(seq_tmp);						
+				seq_num++;
+			}			
 		}
-		cout << "File " << filename << ", #lines " << line_num << endl;
-		cout << "#deletion " << del_num << endl;
-		in_file.close();		
+		else
+			cout << "\tERROR: Unknown chromosome of the sequence " << str_mat[i][0] << "\t" << str_mat[i][1] << "\t" << str_mat[i][2] << endl;
 	}
-	else {
-		cout << "Can not open file " << filename << endl;
-		return;
-	}
+	cout << "\t#Sequence: " << seq_num << endl;
 }
 
-void read_CTCF (string filename, DeletionMatrix& CTCF_matrix) {
-	IdMap chr_name_to_id;
-	CTCF_matrix.resize(23);
-	for (int chr = 1; chr <= 23; chr++) {
-		string chr_name = "chr" + ((chr < 23)? num_to_string(chr):"X");
-		chr_name_to_id[chr_name] = chr - 1;
-		CTCF_matrix[chr - 1].clear();
-	}
-
-	int site_num = 0;
-	ifstream in_file(filename.c_str());
-	if (in_file.is_open()) {		
-		int line_num = 0;
-		for (string row; getline(in_file, row, ROW_DELIM); ) {
-			line_num++;
-			istringstream ss(row);
-			StringList record;
-			for (string field; getline(ss, field, FIELD_DELIM); )
-				record.push_back(field);
-			if (!record.empty() && !record[0].empty() && record[0][0] != '#') {
-				if (record.size() >= 3) {
-					if (chr_name_to_id.find(record[0]) != chr_name_to_id.end()) {
-						Deletion del_tmp(atoi(record[1].c_str()), atoi(record[2].c_str()));
-						if (del_tmp.right >= del_tmp.left)
-							CTCF_matrix[chr_name_to_id[record[0]]].push_back(del_tmp);
-					}
-					else
-						cout << "ERROR: Unknown chromosome of the CTCF site " << record[0] << "\t" << record[1] << "\t" << record[2] << endl;
-					site_num++;							
-				}
-			}
-		}
-		cout << "File " << filename << ", #lines " << line_num << endl;
-		cout << "#site " << site_num << endl;
-		in_file.close();
-	}
-	else {
-		cout << "Can not open file " << filename << endl;
-		return;
-	}
+int count(const SequenceMatrix& seq_mat) {
+	int n = 0;
+	for (int chr = 0; chr < 23; chr++)
+		n += seq_mat[chr].size();
+	return n;
 }
 
 void read_hi_c_data (string filename, int resolution, ValueMatrix& hi_c_matrix) {
@@ -523,19 +1942,11 @@ void read_hi_c_data (string filename, int resolution, ValueMatrix& hi_c_matrix) 
 		}
 	}
 }
+void read_5C_file (string filename, int header_line_num, int matrix_size,  ValueMatrix& hi_c_matrix) {
+	hi_c_matrix.resize(matrix_size);
 
-void read_TAD_data_with_Juice_format (const string& filename, TADMatrix& tad_mat, int min_size) {
-	IdMap chr_name_to_id;
-	tad_mat.resize(23);
-	for (int chr = 1; chr <= 23; chr++) {
-		string chr_name = ((chr < 23)? num_to_string(chr):"X");
-		chr_name_to_id[chr_name] = chr - 1;
-		tad_mat[chr - 1].clear();
-	}
-	
 	ifstream in_file(filename.c_str());
-	if (in_file.is_open()) {
-		ValueList left_list, right_list;
+	if (in_file.is_open()) {		
 		int line_num = 0;
 		for (string row; getline(in_file, row, ROW_DELIM); ) {
 			line_num++;
@@ -543,126 +1954,128 @@ void read_TAD_data_with_Juice_format (const string& filename, TADMatrix& tad_mat
 			StringList record;
 			for (string field; getline(ss, field, FIELD_DELIM); )
 				record.push_back(field);
-			if (!record.empty() && !record[0].empty() && record[0][0] != '#') {
-				if (record.size() >= 4) {
-					if (record[0].compare(record[3]) == STR_EQ) { // the first header line will be skipped by this
-						if (chr_name_to_id.find(record[0]) != chr_name_to_id.end()) {
-							TAD tad_tmp (atoi(record[1].c_str()), atoi(record[2].c_str()));
-							if (tad_tmp.right - tad_tmp.left >= min_size)
-								tad_mat[chr_name_to_id[record[0]]].push_back(tad_tmp);
-						}
-						else
-							cout << "ERROR: Unknown chromosome of the TAD " << record[0] << "\t" << record[1] << "\t" << record[2] << endl;
-					}
+			if (line_num > header_line_num) {
+				if (record.size() != matrix_size + 1) {
+					cout << "ERROR: line " << line_num << " has " << record.size() << " elements while the matrix size = " << matrix_size << endl; 
+					return;
 				}
+				hi_c_matrix[line_num - header_line_num - 1].clear();
+				for (int i = 0; i < matrix_size; i++)
+					hi_c_matrix[line_num - header_line_num - 1].push_back(atoi(record[i + 1].c_str()));			
 			}
 		}
 		cout << "File " << filename << ", #lines " << line_num << endl;
+		if (line_num != header_line_num + matrix_size)
+			cout << "ERROR: Reading a 5C file with " << header_line_num << " header lines, matrix size = " << matrix_size << " with " << line_num << " lines!" << endl;
 		in_file.close();
 	}
-	else
+	else {
 		cout << "Can not open file " << filename << endl;
+		return;
+	}
 }
 
-void read_TAD_boundary_with_4_col_format (const string& filename, TADBoundaryMatrix& tad_boundary_mat) {
-	IdMap chr_name_to_id;
-	tad_boundary_mat.resize(23);
-	for (int chr = 1; chr <= 23; chr++) {
-		string chr_name = ((chr < 23)? num_to_string(chr):"X");
-		chr_name_to_id[chr_name] = chr - 1;
-		tad_boundary_mat[chr - 1].clear();
-	}
+Sequence::Sequence () {
+	left = right = -1;
+	score_list = {0};	
+}
+Sequence::Sequence (int l, int r, double s) {
+	left = l;
+	right = r;
+	score_list.clear();
+	score_list.push_back(s);
+}	
 
-	ifstream in_file(filename.c_str());
-	if (in_file.is_open()) {
-		ValueList left_list, right_list;
-		int line_num = 0;
-		for (string row; getline(in_file, row, ROW_DELIM); ) {
-			line_num++;
-			istringstream ss(row);
-			StringList record;
-			for (string field; getline(ss, field, FIELD_DELIM); )
-				record.push_back(field);
-			if (!record.empty() && !record[0].empty() && record[0][0] != '#') {
-				if (record.size() >= 4) {
-					if (chr_name_to_id.find(record[0]) != chr_name_to_id.end()) {
-						TADBoundary tad_boundary_tmp (atoi(record[1].c_str()), atoi(record[2].c_str()), atof(record[3].c_str()));
-						tad_boundary_mat[chr_name_to_id[record[0]]].push_back(tad_boundary_tmp);
-					}
-					else
-						cout << "ERROR: Unknown chromosome of the TAD boundary " << record[0] << "\t" << record[1] << "\t" << record[2] << "\t" << record[3] << endl;
-				}
-			}
-		}
-		cout << "File " << filename << ", #lines " << line_num << endl;
-		in_file.close();
-	}
+DistributionSummary::DistributionSummary() {
+	size = 0;
+	mean = std = 0;
+}
+void DistributionSummary::add_value (double x) {
+	double new_mean = (size*mean + x)/(size + 1);
+	double tmp = (x*x + size*(std*std + mean*mean))/(size+1) - new_mean*new_mean;
+	if (tmp > 1e-10)
+		std = sqrt(tmp);
 	else
-		cout << "Can not open file " << filename << endl;
+		std = 0;
+	mean = new_mean;
+	size++;
+}
+void DistributionSummary::merge (const DistributionSummary& s) {
+	int new_size = size + s.size;
+	double new_mean = (size*mean + s.size*s.mean)/new_size;
+	std = sqrt((size*(mean*mean + std*std) + s.size*(s.mean*s.mean + s.std*s.std))/new_size - new_mean*new_mean);
+	mean = new_mean;
+	size += s.size;
 }
 
-void print_tad_list (string filename, const TADList& tad_list, int chr) {
-	ofstream out_file (filename.c_str());
-	out_file << "chr1\tx1\tx2\tchr2\ty1\ty2\tcolor" << endl;
-	for (int i = 0; i < tad_list.size(); i++)
-		out_file << chr << "\t" << tad_list[i].left << "\t" << tad_list[i].right << "\t" << chr << "\t" << tad_list[i].left << "\t" << tad_list[i].right << "\t0,0,225" << endl; 
-	out_file.close();
-}
 
-void print_boundary_list (string filename, int chr_num, const TADBoundaryList& boundary_list) {
-	ofstream boundary_file (filename.c_str());
-	boundary_file << "variableStep chrom=chr" + num_to_string(chr_num) << endl;
-	for (int i = 0; i < boundary_list.size(); i++) {
-		boundary_file << round((boundary_list[i].left + boundary_list[i].right)/2) << "\t" << boundary_list[i].score << endl;
+ExplicitDistribution::ExplicitDistribution() {
+	freq.clear();
+	n = 0;
+}
+void ExplicitDistribution::add_value (int x) {
+	if (x < 0)
+		cout << "Can not add a negative value " << x << " to a ExplicitDistribution!" << endl;
+	else if (x < freq.size())
+		freq[x]++;
+	else {
+		ValueList freq_tmp(x + 1, 0);
+		for (int i = 0; i < freq.size(); i++)
+			freq_tmp[i] = freq[i];
+		freq_tmp[x] = 1;
+		freq = freq_tmp;
 	}
-	boundary_file.close();
+	n++;
 }
-
-void print_wig_file (string filename, int chr_num, int left, int right, int resolution, const ValueList& score_list) {
-	if (right - left + 1 < score_list.size())
-		cout << "Error: Exoprt wig file error!" << endl;
+double ExplicitDistribution::get_prob (int x) const {
+	if (x >= 0 && x < freq.size())
+		return freq[x]/n;
+	else
+		return 0;
+}
+void ExplicitDistribution::read_from_file (string filename) {
+	IdList col_list = {0, 1};
+	StringMatrix str_mat;
+	read_a_table_file (filename, ROW_DELIM, FIELD_DELIM, '#', true, col_list, str_mat);
+	freq.clear();
+	n = 0;
+	for (int i = 0; i < str_mat.size(); i++) {
+		int x = atoi(str_mat[i][0].c_str());
+		for ( ;x >= freq.size(); )
+			freq.push_back(0);
+		int f = atoi(str_mat[i][1].c_str());
+		freq[x] = f;
+		n += f;
+	}
+}
+void ExplicitDistribution::print_to_file (string filename) const { 
 	ofstream out_file (filename.c_str());
-	out_file << "variableStep chrom=chr" + num_to_string(chr_num) << endl;
-	for (int i = left; i <= right; i++)
-		out_file << i*resolution << "\t" << score_list[i - left] << endl;
+	for (int i = 0; i < freq.size(); i++)
+		out_file << i << "\t" << freq[i] << endl;
 	out_file.close();
 }
 
-void print_data_file (string filename, int left, int right, int resolution, const ValueList& score_list, const IdList& left_TAD_list, const IdList& right_TAD_list) {
-	if (right - left + 1 < score_list.size())
-		cout << "Error: Exoprt wig file error!" << endl;
-	ofstream out_file (filename.c_str());
-	for (int i = left; i <= right; i++)
-		out_file << i << "\t" << score_list[i - left] << "\t" << left_TAD_list[i - left] << "\t" << right_TAD_list[i- left] << "\t"
-			<< i*resolution << "\t" << left_TAD_list[i - left]*resolution << "\t" << right_TAD_list[i- left]*resolution << endl;
-	out_file.close();
-}
 
-void print_dist_list (const DistributionSummaryList& dsl) {
-	for (int i = 0; i < dsl.size(); i++)
-		cout << i << "\t" << dsl[i].mean << "\t" << dsl[i].std << endl;
-}
-
-double RSQ (const ValueList& x, const ValueList& y) { // x: pred, y: obs
+double PCC (const ValueList& x, const ValueList& y, double zero) { // x: pred, y: obs
 	if (x.size() != y.size() || x.empty() || y.empty()) {
-		cout << "Error: RSQ of two different vector sizes " << x.size() << " and " << y.size() << endl;
+		cout << "Error: PCC of two different vector sizes " << x.size() << " and " << y.size() << endl;
 		return 0;
 	}
 	double x2 = 0, y2 = 0, xy = 0, x_mean, y_mean;
 	for (int i = 0; i < x.size(); i++) {
-		x_mean += ((x[i] > ZERO_ENTRY)? x[i]:ZERO_ENTRY);
-		y_mean += ((y[i] > ZERO_ENTRY)? y[i]:ZERO_ENTRY);
+		x_mean += ((x[i] > zero)? x[i]:zero);
+		y_mean += ((y[i] > zero)? y[i]:zero);
 	}
 	x_mean /= x.size();
 	y_mean /= y.size();
 	for (int i = 0; i < x.size(); i++) {
-		double w = ((x[i] > ZERO_ENTRY)? x[i]:ZERO_ENTRY);
-		double z = ((y[i] > ZERO_ENTRY)? y[i]:ZERO_ENTRY);
+		double w = ((x[i] > zero)? x[i]:zero);
+		double z = ((y[i] > zero)? y[i]:zero);
 		x2 += (w - x_mean)*(w - x_mean);
 		y2 += (z - y_mean)*(z - y_mean);
 		xy += (w - x_mean)*(z - y_mean);
 	}
-	//cout << x2 << "\t" << y2 << "\t" << xy << endl;
+	cout << x_mean << "\t" << y_mean << "\t" << x2 << "\t" << y2 << "\t" << xy << endl;
 	if (x2 < 1e-9 && y2 < 1e-9)
 		return 1;
 	else if (x2 < 1e-9 || y2 < 1e-9)
@@ -671,11 +2084,11 @@ double RSQ (const ValueList& x, const ValueList& y) { // x: pred, y: obs
 		return xy/sqrt(x2*y2);		
 }
 
-double average_log_ratio (const ValueList& pred, const ValueList& obs) {
+double average_log_ratio (const ValueList& pred, const ValueList& obs, double zero) {
 	double s = 0, count = 0;
 	for (int i = 0; i < pred.size(); i++) {
-		double w = ((pred[i] > ZERO_ENTRY)? pred[i]:ZERO_ENTRY);
-		double z = ((obs[i] > ZERO_ENTRY)? obs[i]:ZERO_ENTRY);
+		double w = ((pred[i] > zero)? pred[i]:zero);
+		double z = ((obs[i] > zero)? obs[i]:zero);
 		//if (obs[i] > ZERO_ENTRY) {
 			s += abs(log(w) - log(z));
 			count++;
@@ -716,1168 +2129,91 @@ void line_LQ (const ValueList& x, const ValueList& y, double& a, double& b) {	//
 	b = (y_sum*x2 - x_sum*xy)/(x.size()*x2 - x_sum*x_sum);
 }
 
-void print_prediction (string prefix, const ValueMatrix& hi_c_mat, int left_1, int right_1, int left_2, int right_2, const ValueMatrix& pred_mat) {
-	string filename = prefix + "_tab.dat";
-	ofstream tab_file (filename.c_str());
-	filename = prefix + ".dat";
-	ofstream col_file (filename.c_str());
-	int l1 = right_1 - left_1 + 1, l2 = right_2 - left_2 + 1;
-	for (int i = 0; i < l1 + l2; i++) {
-		for (int j = 0; j < l1 + l2; j++) {
-			if (i <= j) {
-				if (i < l1 && j < l1)
-					tab_file << hi_c_mat[left_1 + i][left_1 + j] << "\t";
-				else if (i >= l1 && j >= l1)
-					tab_file << hi_c_mat[left_2 + i - l1][left_2 + j - l1] << "\t";
-				else {
-					tab_file << "(" << hi_c_mat[left_1 + i][left_2 + j - l1] << "|" << round(100*pred_mat[i][j - l1])/100 << ")\t";
-					col_file << i + left_1 << "\t" << j - l1 + left_2 << "\t" << hi_c_mat[left_1 + i][left_2 + j - l1] << "\t" << round(100*pred_mat[i][j - l1])/100 << endl; 
+void read_a_table_file (string filename, char row_delim_char, char field_delim_char, char comment_char, int skipping_header_line_num, const IdList& col_list, StringMatrix& str_mat) {
+	str_mat.clear();
+	ifstream in_file(filename.c_str());
+	if (in_file.is_open()) {		
+		cout << "Reading file " << filename << endl;
+		int line_num = 0;
+		for (string row; getline(in_file, row, row_delim_char); ) {
+			line_num++;
+			if (line_num > skipping_header_line_num) {
+				istringstream ss(row);
+				StringList record;
+				for (string field; getline(ss, field, field_delim_char); )
+					record.push_back(field);
+				if (!record.empty() && !record[0].empty() && record[0][0] != comment_char) {
+					StringList tmp;
+					for (int i = 0; i < col_list.size(); i++)
+						if (record.size() > col_list[i])
+							tmp.push_back(record[col_list[i]]);
+						else
+							cout << "\tline " << line_num << " has only " << record.size() 
+								<< " fields while the required index is " << col_list[i] << endl;
+					if (tmp.size() == col_list.size())
+						str_mat.push_back(tmp);
 				}
 			}
-			else 
-				tab_file << "-1\t";			
 		}
-		tab_file << endl;
-	}
-	tab_file.close();
-	col_file.close();
-}
-
-ValueList naive_prediction (const ValueMatrix& hi_c_mat, int left_1, int right_1, int left_2, int right_2, bool print_out) {
-	int max_length = (right_1 - left_1 > right_2 - left_2)? (right_1 - left_1):(right_2 - left_2);
-	vector<DistributionSummary> dist_sum_list(max_length + 1);
-	for (int length = 1; length <= right_1 - left_1; length++)
-		for (int pos = left_1; pos + length <= right_1; pos++)
-			dist_sum_list[length].add_value(hi_c_mat[pos][pos + length]);
-	for (int length = 1; length <= right_2 - left_2; length++)
-		for (int pos = left_2; pos + length <= right_2; pos++)
-			dist_sum_list[length].add_value(hi_c_mat[pos][pos + length]);
-	
-	ValueList x,y;
-	for (int i = 1; i <= max_length; i++) {
-		x.push_back(log(i));
-		y.push_back(log((dist_sum_list[i].mean > 0)? dist_sum_list[i].mean:ZERO_ENTRY));
-	}
-	double a,b;
-	line_LQ(x, y, a, b);
-
-	//cout << "(a,b)" << a << "\t" << b << endl;
-
-	//pred_mat.resize(right_1 - left_1 + 1);
-	ValueList obs, pred;
-	for (int i = left_1; i <= right_1; i++) {
-		for (int j = left_2; j <= right_2; j++) {
-			double obs_val = hi_c_mat[i][j];
-			double log_ij = log(right_1 - i + j - left_2 + 1);
-			double pred_val = exp(a*log_ij + b);
-			//pred_mat[i - left_1].push_back(pred_val);
-			obs.push_back(obs_val);
-			pred.push_back(pred_val);
-		}
-	}
-	if (print_out) {
-		string file_name = "Debug/Naive_" + num_to_string(left_1) + "_" + num_to_string(right_1) + ".dat";
-		ofstream out_file(file_name.c_str());
-		for (int i = 0; i < pred.size(); i++)
-			out_file << pred[i] << "\t" << obs[i] << endl;
-		out_file.close();
-	}
-
-	ValueList tmp;
-	tmp.push_back(RSQ(pred, obs));
-	tmp.push_back(average_log_ratio(pred, obs));
-	tmp.push_back(L1(pred, obs));
-	tmp.push_back(L2(pred, obs));
-	return tmp;
-}
-
-ValueList norm_naive_prediction (const ValueMatrix& hi_c_mat, int left_1, int right_1, int left_2, int right_2, ValueMatrix& pred_mat) {
-	int max_length = (right_1 - left_1 > right_2 - left_2)? (right_1 - left_1):(right_2 - left_2);
-	ValueList left_norm (right_1 - left_1 + 1), right_norm(right_2 - left_2 + 1);
-	for (int i = left_1; i <= right_1; i++)
-		left_norm[i - left_1] = (hi_c_mat[i][i] > 0)? hi_c_mat[i][i]:ZERO_ENTRY;
-	for (int i = left_2; i <= right_2; i++)
-		right_norm[i- left_2] = (hi_c_mat[i][i] > 0)? hi_c_mat[i][i]:ZERO_ENTRY;
-	vector<DistributionSummary> dist_sum_list(max_length + 1);
-	for (int length = 1; length <= right_1 - left_1; length++)
-		for (int pos = left_1; pos + length <= right_1; pos++)
-			dist_sum_list[length].add_value(hi_c_mat[pos][pos + length]/sqrt(left_norm[pos - left_1]*left_norm[pos + length - left_1]));
-	for (int length = 1; length <= right_2 - left_2; length++)
-		for (int pos = left_2; pos + length <= right_2; pos++)
-			dist_sum_list[length].add_value(hi_c_mat[pos][pos + length]/sqrt(right_norm[pos - left_2]*right_norm[pos + length - left_2]));
-	
-	ValueList x,y;
-	for (int i = 1; i <= max_length; i++) {
-		x.push_back(log(i));
-		y.push_back(log((dist_sum_list[i].mean > 0)? dist_sum_list[i].mean:ZERO_ENTRY));
-	}
-	double a,b;
-	line_LQ(x, y, a, b);
-
-	//cout << "(a,b)" << a << "\t" << b << endl;
-
-	pred_mat.resize(right_1 - left_1 + 1);
-	ValueList obs, pred;
-	for (int i = left_1; i <= right_1; i++) {
-		for (int j = left_2; j <= right_2; j++) {
-			double obs_val = hi_c_mat[i][j];
-			double log_ij = log(right_1 - i + j - left_2 + 1);
-			double pred_val = exp(a*log_ij + b)*sqrt(left_norm[i - left_1]*right_norm[j - left_2]);
-			pred_mat[i - left_1].push_back(pred_val);
-			obs.push_back(obs_val);
-			pred.push_back(pred_val);
-		}
-	}
-	ValueList tmp;
-	tmp.push_back(RSQ(pred, obs));
-	tmp.push_back(average_log_ratio(pred, obs));
-	return tmp;
-}
-
-void Floyd_APSP (const ValueMatrix& graph_dist_mat, ValueMatrix& shortest_dist_mat) {
-	int n = graph_dist_mat.size();
-	ValueMatrix shortest_dist_mat_tmp = graph_dist_mat;
-	ValueMatrix prev_node_mat = graph_dist_mat;
-	for (int i = 0; i < n; i++) {
-		for (int j = 0; j < n; j++) {
-			shortest_dist_mat_tmp[i][j] = graph_dist_mat[i][j];
-			prev_node_mat[i][j] = -1;
-		}
-		shortest_dist_mat_tmp[i][i] = 0.0;
-	}
-	for (int k = 0; k < n; k++) {
-		//cout << k << endl;
-		for (int i = 0; i < n; i++) {
-			for (int j = 0; j < n; j++) {
-				if (shortest_dist_mat_tmp[i][k] + shortest_dist_mat_tmp[k][j] < shortest_dist_mat_tmp[i][j]) {
-					shortest_dist_mat_tmp[i][j] = shortest_dist_mat_tmp[i][k] + shortest_dist_mat_tmp[k][j];
-					//prev_node_mat[i][j] = k;
-  				}
-			}
-		}
-	}
-	shortest_dist_mat.resize(n);
-	for (int i = 0; i < n; i++) {
-		shortest_dist_mat[i].resize(i);
-		for (int j = 0; j < i; j++)
-			shortest_dist_mat[i][j] = shortest_dist_mat_tmp[i][i - j - 1];	// shortest_dist_mat[i][j] = shortest path from i to i-j-1,
-	}
-}
-
-void limited_shortest_path(const ValueMatrix& distance_mat, int min_length, int window, ValueMatrix& shortest_dist_mat) {
-	int n = distance_mat.size();
-	shortest_dist_mat.resize(n);	// shortest_dist_mat[i][j] = shortest path from i to i-j-1, j <= min_length, all path are in [i-j-w,i+w]
-	ValueMatrix shortest_dist_mat_tmp(n);
-	for (int k = 0; k < n; k++) {
-		//if (k % 100 == 0)
-		//	cout << k << endl;
-		int l = (k >= min_length + 2*window)? (min_length + 2*window):k;
-		resize_and_fill(shortest_dist_mat_tmp[k], l, 0);
-		ValueList tmp(l, 0);
-		for (int i = 1; i <= l; i++) {
-			shortest_dist_mat_tmp[k][i - 1] = tmp[i - 1] = distance_mat[k][k - i];
-			for (int j = 1; j <= l; j++)
-				if (i != j) {
-					//cout << k << "\t" << i << "\t" << j << endl;
-					//cout << shortest_dist_mat[((j > i)?(k-i):(k-j))].size() << endl;
-					double d_tmp = ((j > i)? shortest_dist_mat_tmp[k-i][j-i-1]:shortest_dist_mat_tmp[k-j][i-j-1]);
-					if (tmp[i-1] > distance_mat[k][k-j] + d_tmp)
-						tmp[i-1] = distance_mat[k][k-j] + d_tmp;
-				}
-		}
-		for (int i = 1; i <= l; i++)
-			for (int j = i + 1; j <= l; j++)
-				if (shortest_dist_mat_tmp[k-i][j-i-1] > tmp[i-1] + tmp[j-1])
-					shortest_dist_mat_tmp[k-i][j-i-1] = tmp[i-1] + tmp[j-1];
-		IdList node_list;
-		if (k >= window) 
-			node_list.push_back(k - window);
-		if (k == n - 1) {
-			int i_min = ((k >= window - 1)? (k - window + 1):0);
-			for (int i = i_min; i < n; i++)
-				node_list.push_back(i);
-		}	
-
-		for (int i = 0; i < node_list.size(); i++) {
-			int l_p = (node_list[i] >= min_length)? min_length : node_list[i];
-			shortest_dist_mat[node_list[i]].resize(l_p);
-			for (int j = 0; j < l_p; j++)
-				shortest_dist_mat[node_list[i]][j] = shortest_dist_mat_tmp[node_list[i]][j];
-		}
-	}
-
-	/*for (int i = 0; i < distance_mat.size(); i++) {
-		for (int j = 0; j < distance_mat.size(); j++)
-			cout << distance_mat[i][j] << " ";
-		cout << endl;
-	}
-	for (int i = 0; i < shortest_dist_mat.size(); i++) {
-		for (int j = 0; j < shortest_dist_mat[i].size(); j++)
-			cout << shortest_dist_mat[i][j] << " ";
-		cout << endl;
-	}*/		
-}
-
-// Only interactions that have the length <= max_length_in_obj will contribute to the obj function
-void fit_hi_c_data_model (const ValueMatrix& hi_c_mat, int left, int right, int shortest_path_mode, int max_length_in_obj, int shortest_path_window_size, HiCDataModel& hi_c_data_model) {
-	//cout << hi_c_mat.size() << "\t" << left << "\t" << right << endl;
-	int length = right - left + 1;
-	ValueList norm_val(length);
-	for (int i = 0; i < length; i++)
-		norm_val[i] = ((hi_c_mat[left + i][left + i] > 0)? hi_c_mat[left + i][left + i]:ZERO_ENTRY);
-
-	ValueMatrix distance_mat(length);
-	for (int i = 0; i < length; i++) {
-		distance_mat[i].resize(length);
-		for (int j = 0; j < length; j++) {
-			int pos_i = left + i, pos_j = left + j;
-			distance_mat[i][j] = pow(((hi_c_mat[pos_i][pos_j] > 0)? hi_c_mat[pos_i][pos_j]:ZERO_ENTRY)/sqrt(norm_val[i]*norm_val[j]),-1);
-			
-		}
-	}
-
-	ValueMatrix shortest_dist_mat;
-	if (shortest_path_mode == FLOYD_SHORTEST_PATH)
-		Floyd_APSP(distance_mat, shortest_dist_mat);		
-	else if (shortest_path_mode == APPROX_SHORTEST_PATH)
-		limited_shortest_path(distance_mat, max_length_in_obj, shortest_path_window_size, shortest_dist_mat); 
-	else
-		cout << "Can not find the mode of finding the shortest path " << shortest_path_mode << endl;
-	//for (int i = 0; i < distance_mat.size(); i++)
-	//	cout << i << "\t" << shortest_dist_mat[i].size() << endl;
-	//cout << "Complete finding all the shortest paths" << endl;
-
-	CPXENVptr env = NULL;
-	CPXLPptr lp = NULL;
-
-	int alpha_size = length;
-	int beta_size = 1;
-	int e_size = ((length > max_length_in_obj)? ((length - max_length_in_obj)*max_length_in_obj + max_length_in_obj*(max_length_in_obj - 1)/2) : (length*(length - 1)/2));	// slack
-	int r_size = length;															// resistance
-
-	int var_num = alpha_size + beta_size + e_size + r_size; 
-	int status = 0;
-	env = CPXopenCPLEX (&status);
-	/* Turn on output to the screen */
-	status = CPXsetintparam (env, CPXPARAM_ScreenOutput, CPX_OFF);
-	/* Turn on data checking */
-	status = CPXsetintparam (env, CPXPARAM_Read_DataCheck, CPX_ON);
-	//status = CPXsetintparam (env, CPX_PARAM_LPMETHOD, CPX_ALG_BARRIER);
-	/* Create the problem */
-	lp = CPXcreateprob (env, &status, "linear_model");
-	/* Populate the problem */
-	/* Problem is minimization */
-	status = CPXchgobjsen (env, lp, CPX_MIN);
-	// For obj and bounds
-	double* obj = (double*) malloc(var_num*sizeof(double));
-	double* lb = (double*) malloc(var_num*sizeof(double));
-	double* ub = (double*) malloc(var_num*sizeof(double));
-	char** colname = (char**) malloc(var_num*sizeof(char*));
-	
-	int  current_id = 0;
-	// alpha
-	for (int i = 0; i < alpha_size; i++) {
-		lb[current_id] = -CPX_INFBOUND;
-		ub[current_id] = CPX_INFBOUND;
-		//lb[current_id] = log(hi_c_mat[left + i][left + i]);
-		//ub[current_id] = log(hi_c_mat[left + i][left + i] + 1e-10);
-
-		colname[current_id] = (char*) malloc(50*sizeof(char));
-		sprintf(colname[current_id], "a_%i\0", i);
-		obj[current_id] = 0;
-		current_id++;
-	}
-	// beta
-	lb[current_id] = -2;
-	ub[current_id] = -1;
-	//lb[current_id] = -1.00001;
-	//ub[current_id] = -1;
-	
-	colname[current_id] = (char*) malloc(50*sizeof(char));
-	sprintf(colname[current_id], "beta\0");
-	obj[current_id] = 0;
-	current_id++;
-	// slack
-	int tmp = current_id;
-	int cell_num_tmp = 0;
-	for (int i = 0; i < length; i++) {
-		int max_i = ((i + max_length_in_obj < length)? (i + max_length_in_obj):(length-1));
-		for (int j = i + 1; j <= max_i; j++) {
-			lb[current_id] = 0;
-			ub[current_id] = CPX_INFBOUND;
-			colname[current_id] = (char*) malloc(50*sizeof(char));
-			sprintf(colname[current_id], "e_%i,%i\0", i, j);
-			obj[current_id] = 1;
-			current_id++;
-			cell_num_tmp += (4 + j - i - 1);
-		}
-	}
-	//cout << "#Var " << current_id - tmp << "\t" << e_size << endl;
-	// resistance
-	for (int i = 0; i < length; i++) {
-		lb[current_id] = 0;
-		ub[current_id] = CPX_INFBOUND;
-		colname[current_id] = (char*) malloc(50*sizeof(char));
-		sprintf(colname[current_id], "r_%i\0", i);
-		obj[current_id] = 0;
-		current_id++;
-	}
-	/* Obj and the bound */
-	status = CPXnewcols (env, lp, var_num, obj, lb, ub, NULL, colname);
-	if (status) {
-		cout << "LINH: Fail to set up (bound and obj) the LP problem!" << endl;
-		cout << "(left,right) = " << left << "\t" << right << endl;
-	}
-	//else 
-	//	cout << "LINH: Add all variables successfully!" << endl;
-	/* Add constraints */
-	int row_num = 2*e_size;
-	int cell_num = 2*cell_num_tmp;
-	int* rmatbeg = (int*) malloc(row_num*sizeof(int));
-	int* rmatind = (int*) malloc(cell_num*sizeof(int));
-	double* rmatval = (double*) malloc(cell_num*sizeof(double));
-	double* rhs = (double*) malloc(row_num*sizeof(double));
-	char* sense = (char*) malloc(row_num*sizeof(char));
-	char** rowname = (char**) malloc(row_num*sizeof(char*));
-	
-	int current_row_id = 0;
-	int current_cell_id = 0;
-	//cout << "Total: " << length << endl;
-	for (int i = 0; i < length; i++) {
-		int i_max = ((i + max_length_in_obj < length)? (i + max_length_in_obj):(length-1));
-		//if (i > n - 10)
-		//	cout << i << endl;
-		for (int j = i + 1; j <= i_max; j++) {
-			double logH = ((hi_c_mat[left + i][left + j] > 0)? log(hi_c_mat[left + i][left + j]) : log(ZERO_ENTRY));
-			// (a_i + a_j)/2 + beta*log(d_ij) - sum(r_k) - e_ij <= log(H_ij)
-			rmatbeg[current_row_id] = current_cell_id;
-			sense[current_row_id] = 'L';
-			rhs[current_row_id] = logH;
-			rowname[current_row_id] = (char*) malloc(20*sizeof(char));
-			sprintf(rowname[current_row_id], "e_%i,%i\0", i, j);
-			rmatind[current_cell_id] = i;
-			rmatval[current_cell_id] = 0.5;
-			rmatind[current_cell_id + 1] = j;
-			rmatval[current_cell_id + 1] = 0.5;
-			rmatind[current_cell_id + 2] = alpha_size;
-			rmatval[current_cell_id + 2] = log(shortest_dist_mat[j][j - i - 1]);
-			rmatind[current_cell_id + 3] = alpha_size + 1 + round(current_row_id/2);
-			rmatval[current_cell_id + 3] = -1;
-			for (int k = i + 1; k < j; k++) {
-				rmatind[current_cell_id + 3 + k - i] = alpha_size + 1 + e_size + k;
-				rmatval[current_cell_id + 3 + k - i] = -1; 
-			}
-			current_row_id++;
-			current_cell_id += 3 + (j-i);
-			// -(a_i + a_j)/2 - beta*log(d_ij) + sum(r_k) - e_ij <= -log(H_ij)
-			rmatbeg[current_row_id] = current_cell_id;
-			sense[current_row_id] = 'L';
-			rhs[current_row_id] = -logH;
-			rowname[current_row_id] = (char*) malloc(20*sizeof(char));
-			sprintf(rowname[current_row_id], "e_%i,%i\0", i, j);
-			rmatind[current_cell_id] = i;
-			rmatval[current_cell_id] = -0.5;
-			rmatind[current_cell_id + 1] = j;
-			rmatval[current_cell_id + 1] = -0.5;
-			rmatind[current_cell_id + 2] = alpha_size;
-			rmatval[current_cell_id + 2] = -log(shortest_dist_mat[j][j - i - 1]);
-			rmatind[current_cell_id + 3] = alpha_size + 1 + round(current_row_id/2);
-			rmatval[current_cell_id + 3] = -1;
-			for (int k = i + 1; k < j; k++) {
-				rmatind[current_cell_id + 3 + k - i] = alpha_size + 1 + e_size + k;
-				rmatval[current_cell_id + 3 + k - i] = 1; 
-			}
-			current_row_id++;
-			current_cell_id += 3 + (j-i);
-		}
-	}
-	//cout << "Estimate: " << row_num << "\t" << cell_num << endl;
-	//cout << "Iterate: " << current_row_id << "\t" << current_cell_id << endl;
-	
-	//status = CPXaddrows (env, lp, 0, row_num, cell_num, rhs, sense, rmatbeg, rmatind, rmatval, NULL, rowname);
-	status = CPXaddrows (env, lp, 0, current_row_id, current_cell_id, rhs, sense, rmatbeg, rmatind, rmatval, NULL, rowname);
-	if (status) {
-		cout << "LINH: Fail to add constraints to LP problem!" << endl;
-		/*for (int i = 0; i < var_num; i++)
-			cout << i << "\t" << lb[i] << "\t" << ub[i] << "\t" << obj[i] << "\t" << colname[i] << endl;
-		cout << "=============================" << endl;
-		for (int i = 0; i < current_row_id; i++)
-			cout << i << "\t" << "rmatbeg: " << rmatbeg[i] << "\tsense: " << sense[i] << "\trhs: " << rhs[i] << "\t" << rowname[i] << endl;
-		for (int i = 0; i < current_cell_id; i++)
-			cout << i << "\t" << "rmatind: " << rmatind[i] << "\t rmatval: " << rmatval[i] << endl;
-		*/
+		cout << "\t#lines " << line_num << "\t#records " << str_mat.size() << endl;
+		in_file.close();	
 	}
 	else {
-		//cout << "LINH: Add all constraints successfully!" << endl;
-	}	
-	/* Solve the problem */
-	status = CPXlpopt (env, lp); 
-	/* Get the actual size of the problem */
-	int cur_numrows = CPXgetnumrows (env, lp);
-	int cur_numcols = CPXgetnumcols (env, lp);
-	double* x = (double*) malloc (cur_numcols*sizeof(double));
-	double* slack = (double*) malloc (cur_numrows*sizeof(double));
-	double* dj = (double*) malloc (cur_numcols*sizeof(double));
-	double* pi = (double*) malloc (cur_numrows*sizeof(double));
-	int solstat;
-	double objval;
-	/* Get the solution */
-	//status = CPXwriteprob (env, lp, "linear_model.lp", NULL);
-	status = CPXsolution (env, lp, &solstat, &objval, x, pi, slack, dj);
-	if (status)
-		cout << "LINH: Fail to solve the LP problem!" << endl;
-	else {
-		//cout << "LINH: Final obj value = " << objval << endl;
-		//for (int i = 0; i < var_num; i++)
-		//	cout << colname[i] << "\t" << x[i] << endl;
-	}
-	
-	// Export the prediction
-	hi_c_data_model.beta = x[alpha_size];
-	resize_and_fill(hi_c_data_model.alpha, length, 0);
-	resize_and_fill(hi_c_data_model.resistance, length, 0);
-	for (int i = 0; i < length; i++) {
-		hi_c_data_model.alpha[i] = x[i];
-		hi_c_data_model.resistance[i] = x[alpha_size + 1 + e_size + i];
-	}
-
-	/* Free the problem */
-	CPXfreeprob(env, &lp);
-	/* Free the environment */
-	CPXcloseCPLEX (&env);
-	/* Free all memory */
-	free(obj);
-	free(ub);
-	free(lb);
-	for (int i = 0 ; i < var_num; i++)
-		free(colname[i]);
-	free(colname);
-	free(x);
-	free(slack);
-	free(dj);
-	free(pi);
-	free(rmatbeg);
-	free(rmatind);
-	free(rmatval);
-	free(rhs);
-	free(sense);
-	for (int i = 0; i < current_row_id; i++)
-		free(rowname[i]);
-	free(rowname);
-}
-
-void Dijkstra (const ValueMatrix& hi_c_mat, int left, int right, int src, ValueList& shortest_path_val_list) {
-	int length = right - left + 1;
-	ValueList norm_val(length);
-	for (int i = 0; i < length; i++)
-		norm_val[i] = ((hi_c_mat[left + i][left + i] > 0)? hi_c_mat[left + i][left + i]:ZERO_ENTRY);
-
-	ValueMatrix graph_val(length);
-	for (int i = 0; i < length; i++) {
-		graph_val[i].resize(length);
-		for (int j = 0; j < length; j++) {
-			int pos_i = left + i, pos_j = left + j;
-			graph_val[i][j] = pow(((hi_c_mat[pos_i][pos_j] > 0)? hi_c_mat[pos_i][pos_j]:ZERO_ENTRY)/sqrt(norm_val[i]*norm_val[j]),-1);
-		}
-	}
-	src = src - left;
-	IdList Q, is_in_Q, prev;
-	ValueList dist;
-	for (int i = 0; i < graph_val.size(); i++) {
-		dist.push_back(1e10);
-		Q.push_back(i);
-		is_in_Q.push_back(1);
-		prev.push_back(-1);	
-	}
-	dist[src] = 0;
-	while (!Q.empty()) {
-		IdList::iterator min_it = Q.begin();
-		for (IdList::iterator it = Q.begin(); it != Q.end(); it++) {
-			if (dist[(*it)] < dist[(*min_it)])
-				min_it = it;
-			//cout << (*it) << "\t" << dist[(*it)] << endl;
-		}
-		int u = (*min_it);
-		Q.erase(min_it);
-		is_in_Q[u] = 0;
-		//cout << u << endl;
-		for (int v = 0; v < graph_val.size(); v++) 
-			if (is_in_Q[v] > 0) {
-				double alt = dist[u] + graph_val[u][v];
-				if (alt < dist[v]) {
-					dist[v] = alt;
-					prev[v] = u;
-				}
-		}
-	}
-	shortest_path_val_list = dist;
-	//for (int i = 0; i < shortest_path_val_list.size(); i++)
-	//	if (shortest_path_val_list[i] < 1e-10)
-	//		cout << "\t Dij " << left << "\t" << right << "\t" << src << "\t" << i << "\t" << shortest_path_val_list[i] << endl;
-	//for (int i = 0; i < graph_val.size(); i++) {
-	//	for (int j = 0; j < graph_val.size(); j++)
-	//		cout << graph_val[i][j] << "\t";
-	//		cout << endl;
-	//}
-	//for (int i = 0; i < shortest_path_val_list.size(); i++)
-	//	cout << shortest_path_val_list[i] << "\t";
-	//cout << endl;
-}
-
-ValueList predict_3D (const ValueMatrix& hi_c_mat, int left_1, int right_1, int left_2, int right_2, int shortest_path_mode, int min_length, int window_size, bool print_out) {
-	if (left_1 >= right_1 || left_2 >= right_2)
-		cout << "ERROR: Can not predict because the left reigon or the right region is so small!" << endl;
-
-	HiCDataModel hi_c_data_model_1, hi_c_data_model_2;
-	fit_hi_c_data_model(hi_c_mat, left_1, right_1, shortest_path_mode, min_length, window_size, hi_c_data_model_1);
-	fit_hi_c_data_model(hi_c_mat, left_2, right_2, shortest_path_mode, min_length, window_size, hi_c_data_model_2);
-	
-	ValueList shortest_path_list_1, shortest_path_list_2;
-	Dijkstra(hi_c_mat, left_1, right_1, right_1, shortest_path_list_1);
-	Dijkstra(hi_c_mat, left_2, right_2, left_2, shortest_path_list_2);
-
-	// print the boundary score
-	//cout << "Boundary" << endl;
-	//for (int i = 0; i < left_length; i++)
-	//	cout << (left_1 + i)*5000 << "\t" << boundary_score_left[i] << endl;
-	//for (int i = 0; i < right_length; i++)
-	//	cout << (left_2 + i)*5000 << "\t" << boundary_score_right[i] << endl;
-
-	// Export the prediction
-	int length_1 = right_1 - left_1 + 1, length_2 = right_2 - left_2 + 1;
-	//pred_mat.resize(right_1 - left_1 + 1);
-	ValueList obs, pred;
-	for (int i = 0; i < length_1; i++) {
-		//pred_mat[i].clear();
-		for (int j = 0; j < length_2; j++) {
-			int pos_i = left_1 + i, pos_j = left_2 + j;
-			double obs_val = hi_c_mat[pos_i][pos_j];
-			double unit_distance = (shortest_path_list_1[length_1 - 2] + shortest_path_list_2[1])/2;	// One unit here
-			double new_distance = shortest_path_list_1[i] + shortest_path_list_2[j] + unit_distance;
-			double log_pred = (hi_c_data_model_1.alpha[i] + hi_c_data_model_2.alpha[j])/2 + ((hi_c_data_model_1.beta + hi_c_data_model_2.beta)/2)*log(new_distance);
-			for (int k = i + 1; k < right_1 - left_1; k++)
-				log_pred -= hi_c_data_model_1.resistance[k];
-			for (int k = 1; k < j; k++)
-				log_pred -= hi_c_data_model_2.resistance[k];
-			double pred_val = exp(log_pred);
-			//cout << left_shortest_path_list[i] << "\t" << right_shortest_path_list[j] << "\t" << pred_val << endl;
-			//pred_mat[i].push_back(pred_val);
-			obs.push_back(obs_val);
-			pred.push_back(pred_val);			
-		}
-		//cout << endl;
-	}
-	if (print_out) {
-		string file_name = "Debug/New_" + num_to_string(left_1) + "_" + num_to_string(right_1) + ".dat";
-		ofstream out_file(file_name.c_str());
-		for (int i = 0; i < pred.size(); i++)
-			out_file << pred[i] << "\t" << obs[i] << endl;
-		out_file.close();
-	}
-
-	ValueList tmp;
-	tmp.push_back(RSQ(pred, obs));
-	tmp.push_back(average_log_ratio(pred, obs));
-	tmp.push_back(L1(pred, obs));
-	tmp.push_back(L2(pred, obs));
-	return tmp;
-}
-
-bool predict_3D (const ValueMatrix& hi_c_mat, const HiCDataModelList& hi_c_data_model_list, int left_1, int right_1, int left_2, int right_2, ValueMatrix& pred_mat) {	
-	if (left_1 >= right_1 || left_2 >= right_2)
-		cout << "ERROR: Can not predict because the left reigon or the right region is so small!" << endl;
-
-	for (int k = 0; k < hi_c_data_model_list.size(); k++) {
-		if (left_1 >= hi_c_data_model_list[k].left && left_2 >= right_1 && right_2 <= hi_c_data_model_list[k].get_right()) {
-			ValueList shortest_path_list_1, shortest_path_list_2;
-			Dijkstra(hi_c_mat, left_1, right_1, right_1, shortest_path_list_1);
-			Dijkstra(hi_c_mat, left_2, right_2, left_2, shortest_path_list_2);
-
-			int domain_left = hi_c_data_model_list[k].left;
-			int length_1 = right_1 - left_1 + 1, length_2 = right_2 - left_2 + 1;
-			pred_mat.resize(right_1 - left_1 + 1);
-			for (int i = 0; i < length_1; i++) {
-				pred_mat[i].clear();
-				for (int j = 0; j < length_2; j++) {
-					int pos_i = left_1 + i, pos_j = left_2 + j;
-					double unit_distance = (shortest_path_list_1[length_1 - 2] + shortest_path_list_2[1])/2;	// One unit here
-					double new_distance = shortest_path_list_1[i] + shortest_path_list_2[j] + unit_distance;
-					double log_pred = (hi_c_data_model_list[k].alpha[i + left_1 - domain_left] + hi_c_data_model_list[k].alpha[j + left_2 - domain_left])/2 + hi_c_data_model_list[k].beta*log(new_distance);
-					for (int r = i + 1; r < right_1 - left_1; r++)
-						log_pred -= hi_c_data_model_list[k].resistance[r + left_1 - domain_left];
-					for (int r = 1; r < j; r++)
-						log_pred -= hi_c_data_model_list[k].resistance[r + left_2 - domain_left];
-					double pred_val = exp(log_pred);
-					//cout << left_shortest_path_list[i] << "\t" << right_shortest_path_list[j] << "\t" << pred_val << endl;
-					pred_mat[i].push_back(pred_val);
-				}
-			}
-			return true;
-		}
-	}	
-	cout << "Error: Can not find the Hi-C data model! " << left_1 << "\t" << right_1 << "\t" << left_2 << "\t" << right_2 << endl;
-	int length_1 = right_1 - left_1 + 1, length_2 = right_2 - left_2 + 1;
-	pred_mat.resize(length_1);
-	for (int i = 0; i < length_1; i++) {
-		pred_mat[i].clear();
-		for (int j = 0; j < length_2; j++)
-			pred_mat[i].push_back(ZERO_ENTRY);
-	}
-	return false;
-}
-
-void export_hi_c_model_list (const ValueMatrix& hi_c_mat, int window_size, int shift_length, int min_length, int shortest_path_window, string filename) {
-	HiCDataModelList hi_c_data_model_list;
-	int current_left = 0;
-	while (current_left < hi_c_mat.size()) {
-		HiCDataModel hi_c_data_model;
-		int right_pos = (current_left + window_size < hi_c_mat.size())? (current_left + window_size): (hi_c_mat.size() - 1);
-		cout << hi_c_mat.size() << "\t" << current_left << "\t" << right_pos << endl;
-		fit_hi_c_data_model(hi_c_mat, current_left, right_pos, APPROX_SHORTEST_PATH, min_length, shortest_path_window, hi_c_data_model);
-		hi_c_data_model.left = current_left;
-		hi_c_data_model_list.push_back(hi_c_data_model);
-		current_left += shift_length;	// Correct here for the final version
-	}
-	write_hi_c_data_model_list(filename, hi_c_data_model_list);
-}
-
-ValueList estimate_fusion_level (const ValueMatrix& hi_c_mat, const HiCDataModelList& hi_c_data_model_list, const DeletionList& del_list, int resolution, int window_size, const ValueList& significance_threshold_list, ValueMatrix& fusion_level_matrix) {
-	fusion_level_matrix.resize(significance_threshold_list.size());
-	ValueList total_fusion_list (significance_threshold_list.size(), 0);
-	for (int i = 0; i < significance_threshold_list.size(); i++)
-		resize_and_fill(fusion_level_matrix[i], del_list.size(), 0);
-	for (int i = 0; i < del_list.size(); i++) {
-		//if (i % 10 == 0)
-		//	cout << i << endl;
-		int del_left = floor(del_list[i].left/resolution), del_right = ceil(del_list[i].right/resolution) - 1;
-		if (del_right >= hi_c_mat.size())
-			cout << "Error: Deletion right = " << del_right << ", hi-c matrix size = " << hi_c_mat.size() << endl;
-		int left_window_size = (del_left >= window_size)? window_size:del_left;
-		int right_window_size = (del_right + window_size < hi_c_mat.size())? window_size: hi_c_mat.size() - 1 - del_right;
-		ValueMatrix pred;
-		bool is_complete = predict_3D(hi_c_mat, hi_c_data_model_list, del_left - left_window_size, del_left, del_right, del_right + right_window_size, pred);
-		for (int l = 0; l <= left_window_size; l++)
-			for (int r = 0; r <= right_window_size; r++) {
-				double old_val = hi_c_mat[del_left - left_window_size + l][del_right + r], new_val = pred[l][r];
-				for (int t = 0; t < significance_threshold_list.size(); t++)
-					if (old_val < significance_threshold_list[t] && new_val > significance_threshold_list[t]) 
-						fusion_level_matrix[t][i]++;
-			}
-		for (int t = 0; t < significance_threshold_list.size(); t++)
-			total_fusion_list[t] += fusion_level_matrix[t][i];
-	}
-	return total_fusion_list;
-}
-
-double conventional_count_fusion (const DeletionList& del_list, const TADList& tad_list, ValueList& fusion_count_list, bool is_printed) {
-	resize_and_fill(fusion_count_list, del_list.size(), 0);
-	double count = 0;
-	for (int k = 0; k < del_list.size(); k++) {
-		bool is_covered_left = false, is_covered_right = false;
-		for (int i = 0; i < tad_list.size(); i++)
-			if (del_list[k].left >= tad_list[i].left && del_list[k].left <= tad_list[i].right && del_list[k].right >= tad_list[i].right) {
-					is_covered_left = true;
-					break;
-			}
-		for (int i = 0; i < tad_list.size(); i++)
-			if (del_list[k].left <= tad_list[i].left && del_list[k].right >= tad_list[i].left && del_list[k].right <= tad_list[i].right) {
-					is_covered_right = true;
-					break;
-			}
-		if (is_covered_left && is_covered_right) {			
-			count++;
-			fusion_count_list[k] = 1;
-			if (is_printed)
-				cout << del_list[k].left << "\t" << del_list[k].right << endl;
-		}
-	}
-	return count;
-}
-
-double conventional_count_fusion (const DeletionList& del_list, const TADBoundaryList& tad_boundary_list, ValueList& fusion_count_list, bool is_printed) {
-	resize_and_fill(fusion_count_list, del_list.size(), 0);
-	double count = 0;
-	for (int k = 0; k < del_list.size(); k++) {
-		for (int i = 0; i < tad_boundary_list.size(); i++)
-			if ((del_list[k].left >= tad_boundary_list[i].left && del_list[k].left <= tad_boundary_list[i].right && del_list[k].right >= tad_boundary_list[i].right) 
-				|| (del_list[k].right >= tad_boundary_list[i].left && del_list[k].right <= tad_boundary_list[i].right && del_list[k].left <= tad_boundary_list[i].left) 
-				|| (del_list[k].left <= tad_boundary_list[i].left && del_list[k].right >= tad_boundary_list[i].right)) { 
-					if (fusion_count_list[k] < tad_boundary_list[i].score)
-						fusion_count_list[k] = tad_boundary_list[i].score;
-			}
-		count += fusion_count_list[k];
-		if (is_printed)
-			cout << del_list[k].left << "\t" << del_list[k].right << endl;
-	}
-	return count;
-}
-
-void sampling_deletion (const DeletionList& del_list, double chr_size, int window_size, DeletionList& sampling_del_list) {
-	sampling_del_list.resize(del_list.size());
-	for (int del = 0; del < del_list.size(); del++) {
-		int l = del_list[del].right - del_list[del].left;
-		double r = (rand() % 10001)/10000.0;
-		sampling_del_list[del].left = round(r*(chr_size - l - 1 - 2*window_size)) + window_size;
-		sampling_del_list[del].right = sampling_del_list[del].left + l;		
+		cout << "Can not open file " << filename << endl;
+		return;
 	}
 }
 
-void prediction_experiment(int chr, int bin_min, int bin_max, const IdList& window_size_list, bool print_out) {
-	string raw_data_file_folder = "/share/hormozdiarilab/Data/HiC/GM12878_combined/5kb_resolution_intrachromosomal/chr";
-	//string raw_data_file_folder = "/share/hormozdiarilab/Data/HiC/IMR90/5kb_resolution_intrachromosomal/chr";
-	string chr_name = ((chr < 23)? num_to_string(chr):"X");
-	string chr_raw_data_filename = raw_data_file_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved";
-	ValueMatrix hi_c_matrix;
-	read_hi_c_data(chr_raw_data_filename, RESOLUTION, hi_c_matrix);
-
-		
-	int max_window_size = window_size_list[window_size_list.size() - 1];
-	if (bin_min < max_window_size)
-		bin_min = max_window_size;
-	if (bin_max > hi_c_matrix.size() - max_window_size - 1)
-		bin_max = hi_c_matrix.size() - max_window_size - 1;	
-	IdList bin_list;
-	for (int i = bin_min; i <= bin_max; i = i + 5) 
-		bin_list.push_back(i);
-
-	DistributionSummaryMatrix naive_error_dist_mat(window_size_list.size()), new_error_dist_mat(window_size_list.size());
-	for (int w = 0; w < window_size_list.size(); w++) {
-		naive_error_dist_mat[w].resize(4);
-		new_error_dist_mat[w].resize(4);
-	}
-	
-	string out_filename = "Debug/error_comparison_" + num_to_string(chr) + "_" + num_to_string(bin_list[0]) + "_" + num_to_string(bin_list[bin_list.size() - 1]) + ".dat";
-	ofstream error_out_file (out_filename.c_str());
-	error_out_file << "Distance\tNaive\tNew" << endl;
-	
-	for (int i = 0; i < bin_list.size(); i++) {
-		if (bin_list[i] % 100 == 0)
-			cout << bin_list[i] << endl;		
-		int bin = bin_list[i];
-		error_out_file << bin;
-		ValueMatrix naive_result(window_size_list.size()), new_result(window_size_list.size());
-		for (int w = 0; w < window_size_list.size(); w++) { 
-			ValueList naive_result = naive_prediction(hi_c_matrix, bin - window_size_list[w], bin, bin + 1, bin + window_size_list[w], print_out);
-			ValueList new_result = predict_3D(hi_c_matrix, bin - window_size_list[w], bin, bin + 1, bin + window_size_list[w], 
-				FLOYD_SHORTEST_PATH, MAX_LENGTH_OBJ, SHORTEST_PATH_WINDOW_SIZE, print_out);
-			for (int k = 0; k < 4; k++) {
-				naive_error_dist_mat[w][k].add_value(naive_result[k]);
-				new_error_dist_mat[w][k].add_value(new_result[k]);
-				error_out_file << "\t" << naive_result[k] << "\t" << new_result[k];
-			}
-		}
-		error_out_file << endl;		
-	}
-	error_out_file.close();
-	out_filename = "Debug/pred_comparison_summary_" + num_to_string(chr) + "_" + num_to_string(bin_list[0]) + "_" + num_to_string(bin_list[bin_list.size() - 1]) + ".dat";
-	ofstream summary_out (out_filename.c_str());
-	summary_out << "Naive(R)\tNew(R)\tNaive(log)\tNew(log)\tNaive(L1)\tNew(L1)\tNaive(L2)\tNew(L2)" << endl;
-	for (int w = 0; w < window_size_list.size(); w++) {
-		for (int k = 0; k < 4; k++)
-			summary_out << ((k > 0)? "\t":"") 
-				<< naive_error_dist_mat[w][k].mean << " +/- " << naive_error_dist_mat[w][k].std << "\t" 
-				<< new_error_dist_mat[w][k].mean << "+/-" << new_error_dist_mat[w][k].std;
-		summary_out << endl;
-	}
-	summary_out.close();
+void read_a_value_list (string filename, int col, ValueList& val_list) {
+	IdList col_list(1, col);
+	StringMatrix str_mat;
+	read_a_table_file (filename, ROW_DELIM, FIELD_DELIM, '#', false, col_list, str_mat);
+	val_list.clear();
+	for (int i = 0; i < str_mat.size(); i++)
+		val_list.push_back(strtod(str_mat[i][0].c_str(), NULL));
 }
 
-void export_all_hi_c_model () {
-	int chr_min = 1;
-	int chr_max = 23;
-	int hi_c_model_window_size = round(6000000/RESOLUTION);
-	// For generating Hi-C data model list
-	string data_file_folder = "/share/hormozdiarilab/Data/HiC/GM12878_combined/5kb_resolution_intrachromosomal/chr" ;
-	string model_file_folder = "/share/hormozdiarilab/Data/HiC/Model/GM12878/";
-	for (int chr = chr_min; chr <= chr_max; chr++) { 
-		string chr_name = ((chr < 23)? num_to_string(chr):"X");
-		string chr_raw_data_filename = data_file_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved"; 
-		ValueMatrix hi_c_mat;
-		read_hi_c_data(chr_raw_data_filename, RESOLUTION, hi_c_mat);
-		export_hi_c_model_list (hi_c_mat, hi_c_model_window_size, round(hi_c_model_window_size/2), MAX_LENGTH_OBJ, SHORTEST_PATH_WINDOW_SIZE, model_file_folder + "chr" + chr_name + ".model");
-		cout << "Complete generating Hi-C model of chromosome " << chr_name << endl;
-	}
+void write_a_value_list (string filename, ValueList& val_list) {
+	ofstream out_file(filename.c_str());
+	for (int i = 0; i < val_list.size(); i++)
+		out_file << i << "\t" << val_list[i] << endl;
+	out_file.close();
 }
 
-void deletion_filter (DeletionMatrix& original_del_mat, const DeletionMatrix& filter_del_mat) {
-	for (int chr = 0; chr < original_del_mat.size(); chr++) {
-		//for (int l = 0; l < filter_del_mat[chr].size(); l++)
-		//	cout << chr + 1 << "\t" << filter_del_mat[chr][l].left << "\t" << filter_del_mat[chr][l].right << endl; 
-		DeletionList tmp;
-		for (int del = 0; del < original_del_mat[chr].size(); del++) {
-			bool is_repeated = false;
-			for (int k = 0; k < filter_del_mat[chr].size(); k++)
-				if (original_del_mat[chr][del].left == filter_del_mat[chr][k].left && original_del_mat[chr][del].right == filter_del_mat[chr][k].right) {
-					is_repeated = true;
-					break;
-				}
-			if (!is_repeated)
-				tmp.push_back(original_del_mat[chr][del]);
-		}
-		//cout << chr << "\t" << original_del_mat[chr].size() << "\t" << tmp.size() << endl;
-		original_del_mat[chr] = tmp;
-	}
+void sort_by_value (const ValueList& l, ValueList& sorted_index, ValueList& rank, bool is_asc) {
+        ValueList x;
+        for (int i = 0; i < l.size(); i++)
+                x.push_back(l[i]*(is_asc? 1:-1));
+        int n = x.size();
+        sorted_index.resize(n);
+        std::size_t tmp(0);
+        std::generate(std::begin(sorted_index), std::end(sorted_index), [&]{ return tmp++; });
+        std::sort(std::begin(sorted_index), std::end(sorted_index), [&](int i, int j) { // Sort min -> max
+                return (x[i] < x[j]);
+        });
+        rank.resize(n);
+        for (int i = 0; i < n; i++)
+                rank[sorted_index[i]] = i + 1;
 }
 
-void deletion_filter (DeletionMatrix& original_del_mat, int max_del_length) {
-	for (int chr = 0; chr < original_del_mat.size(); chr++) {
-		DeletionList tmp;
-		for (int del = 0; del < original_del_mat[chr].size(); del++) {
-			if (original_del_mat[chr][del].right - original_del_mat[chr][del].left <= max_del_length)
-				tmp.push_back(original_del_mat[chr][del]);
-		}
-		//cout << chr << "\t" << original_del_mat[chr].size() << "\t" << tmp.size() << endl;
-		original_del_mat[chr] = tmp;
-	}
+string num_to_string (int n) {
+	stringstream ss;
+	ss << n;
+	return ss.str();
 }
 
-void fusion_experiment (string exp_name, string del_filename, bool is_filtered, int max_del_length, const ValueList& contact_threshold_list, int final_contact_threshold_index, const ValueList& fusion_threshold_list, int sample_num) {
-	int chr_min = 1;	// 1;
-	int chr_max = 23; 	// 23;
-	int min_TAD_size = 10*RESOLUTION;
-	int min_del_size = 2*RESOLUTION;
-	int window_size = round(250000/RESOLUTION);
-	string model_file_folder = "/share/hormozdiarilab/Data/HiC/Model/GM12878/";
-	string raw_data_file_folder = "/share/hormozdiarilab/Data/HiC/GM12878_combined/5kb_resolution_intrachromosomal/chr" ;
-
-	if (final_contact_threshold_index < 0 || final_contact_threshold_index >= contact_threshold_list.size())
-		cout << "ERROR: Not valid index of contact threshold " << final_contact_threshold_index << " vs size = " << contact_threshold_list.size() << endl;
-
-	DeletionMatrix del_mat;
-	read_deletion_mutation_file(del_filename, min_del_size, del_mat);
-
-	if (is_filtered) {
-		string GM12878_variant_filename = "/share/hormozdiarilab/Data/ValidatedVariants/1000G_SV_Phase3/NA12878_Del.BED";
-		DeletionMatrix GM12878_del_mat;
-		read_deletion_mutation_file(GM12878_variant_filename, min_del_size, GM12878_del_mat);
-		deletion_filter(del_mat, GM12878_del_mat);
-	}
-	deletion_filter(del_mat, max_del_length);
-	//for (int chr = 0; chr < 23; chr++)
-	//	for (int del = 0; del < del_mat[chr].size(); del++)
-	//		cout << chr + 1 << "\t" << del_mat[chr][del].left << "\t" << del_mat[chr][del].right << endl;
-
-	string CTCF_filename = "/share/hormozdiarilab/Data/CTCF_Binding/UW_hg19_GM12878_CTCFBSDB.bed";
-	DeletionMatrix CTCF_mat;
-	read_CTCF(CTCF_filename, CTCF_mat);
-	
-	StringList tool_name_list = {"Arrowhead", "CaTCH", "Amaratus", "InsulationScore"};
-	ValueList tool_type_list = {0, 0, 0, 1};	// 0: discrete, 1: continuous
-	StringList TAD_info_filename_list = {"GSE63525_GM12878_primary+replicate_Arrowhead_domainlist.txt", "CaTCH_TAD.dat", "Amaratus_TAD.dat", "insulation_score_TAD.dat"};
-	vector<TADMatrix> TAD_mat_list(tool_name_list.size());
-	vector<TADBoundaryMatrix> TAD_boundary_mat_list(tool_name_list.size());
-
-	ValueMatrix other_observation_fusion_count_matrix(tool_name_list.size());			// tool_num x CHR_NUM
-	ValueMatrix our_observation_fusion_level_matrix(CHR_NUM);					// CHR_NUM x contact_threshold
-	ValueMatrix our_observation_fusion_count_matrix(CHR_NUM);					// CHR_NUM x fusion_threshold
-
-	ValueList other_total_observation_fusion_level(tool_name_list.size(), 0);			// tool_num
-	ValueList our_total_observation_fusion_level(contact_threshold_list.size(), 0);			// contact_threshold
-	ValueList our_total_observation_fusion_count(fusion_threshold_list.size(), 0);			// fusion_threshold
-
-	DistributionMatrix other_permutation_fusion_dist_matrix(tool_name_list.size());			// tool_num x CHR_NUM
-	DistributionMatrix our_permutation_fusion_level_dist_matrix(CHR_NUM);				// CHR_NUM x contact_threshold
-	DistributionMatrix our_permutation_fusion_count_dist_matrix(CHR_NUM);				// CHR_NUM x fusion_threshold
-
-	ValueMatrix other_total_permutation_fusion_level(tool_name_list.size());			// tool_num x sample_num
-	ValueMatrix our_total_permutation_fusion_level(sample_num);					// sample_num x contact_threshold
-	ValueMatrix our_total_permutation_fusion_count(sample_num);					// sample_num x fusion_threshold
-
-	srand (time(NULL));
-	// Read TAD info of different tools
-	string TAD_info_folder = "/share/hormozdiarilab/Data/HiC/TAD_Annotation/GM12878/";
-	for (int tool = 0; tool < tool_type_list.size(); tool++) {			
-		if (tool_type_list[tool] < 1) 
-			read_TAD_data_with_Juice_format (TAD_info_folder + TAD_info_filename_list[tool], TAD_mat_list[tool], min_TAD_size);
-		else 
-			read_TAD_boundary_with_4_col_format (TAD_info_folder + TAD_info_filename_list[tool], TAD_boundary_mat_list[tool]);		
-		other_observation_fusion_count_matrix[tool].resize(CHR_NUM, 0);
-		other_permutation_fusion_dist_matrix[tool].resize(CHR_NUM);
-		resize_and_fill(other_total_permutation_fusion_level[tool], sample_num, 0);		
-
-	}
-	for (int s = 0; s < sample_num; s++) {
-		resize_and_fill(our_total_permutation_fusion_level[s], contact_threshold_list.size(), 0);
-		resize_and_fill(our_total_permutation_fusion_count[s], fusion_threshold_list.size(), 0);
-	}
-	for (int chr = 0; chr < CHR_NUM; chr++) {
-		our_observation_fusion_level_matrix[chr].resize(contact_threshold_list.size());
-		our_observation_fusion_count_matrix[chr].resize(fusion_threshold_list.size());
-		our_permutation_fusion_level_dist_matrix[chr].resize(contact_threshold_list.size());
-		our_permutation_fusion_count_dist_matrix[chr].resize(fusion_threshold_list.size());
-	}
-
-	vector<ValueMatrix> other_observation_fusion_level_matrix_list(CHR_NUM);			// CHR_NUM x tool_num x del_num
-	vector<ValueMatrix> our_observation_fusion_level_matrix_list(CHR_NUM);				// CHR_NUM x contact_threshold x del_num
-	for (int chr = chr_min; chr <= chr_max; chr++) { 
-		string chr_name = ((chr < 23)? num_to_string(chr):"X");
-		string chr_raw_data_filename = raw_data_file_folder + chr_name +  "/MAPQGE30/chr" + chr_name + "_5kb.RAWobserved"; 
-		ValueMatrix hi_c_mat;
-		if (!del_mat[chr - 1].empty())
-			read_hi_c_data(chr_raw_data_filename, RESOLUTION, hi_c_mat);		
-		// Observation 
-		HiCDataModelList hi_c_data_model_list;
-		read_hi_c_data_model_list(model_file_folder + "chr" + chr_name + ".model", hi_c_data_model_list);
-		cout << "Complete loading Hi-C model of chromosome " << chr_name << endl;
-
-		other_observation_fusion_level_matrix_list[chr - 1].resize(tool_name_list.size());
-		our_observation_fusion_level_matrix_list[chr - 1].resize(contact_threshold_list.size());	
-		for (int tool = 0; tool < tool_name_list.size(); tool++) {
-			if (tool_type_list[tool] < 1)
-				other_observation_fusion_count_matrix[tool][chr - 1] = conventional_count_fusion (del_mat[chr - 1], TAD_mat_list[tool][chr - 1], other_observation_fusion_level_matrix_list[chr - 1][tool], false);
-			else 
-				other_observation_fusion_count_matrix[tool][chr - 1] = conventional_count_fusion (del_mat[chr - 1], TAD_boundary_mat_list[tool][chr - 1], other_observation_fusion_level_matrix_list[chr - 1][tool], false);
-			// total
-			other_total_observation_fusion_level[tool] += other_observation_fusion_count_matrix[tool][chr - 1];
-		}
-		our_observation_fusion_level_matrix[chr - 1] = estimate_fusion_level(hi_c_mat, hi_c_data_model_list, del_mat[chr - 1], RESOLUTION, window_size, contact_threshold_list, our_observation_fusion_level_matrix_list[chr - 1]);
-		for (int t = 0; t < contact_threshold_list.size(); t++)
-			our_total_observation_fusion_level[t] += our_observation_fusion_level_matrix[chr - 1][t];
-		for (int t = 0; t < fusion_threshold_list.size(); t++) {
-			our_observation_fusion_count_matrix[chr - 1][t] = 0;
-			for (int del = 0; del < our_observation_fusion_level_matrix_list[chr - 1][final_contact_threshold_index].size(); del++)
-				if (our_observation_fusion_level_matrix_list[chr - 1][final_contact_threshold_index][del] >= fusion_threshold_list[t])
-					our_observation_fusion_count_matrix[chr - 1][t]++;
-			our_total_observation_fusion_count[t] += our_observation_fusion_count_matrix[chr - 1][t];
-		}
-		// Permutated
-		ValueList tmp;
-		for (int sample = 0; sample < sample_num; sample++) {
-			if (sample % 100 == 0)
-				cout << sample << endl;
-			DeletionList sampling_del_list;
-			sampling_deletion (del_mat[chr - 1], hi_c_mat.size()*RESOLUTION, window_size*RESOLUTION, sampling_del_list);
-			for (int tool = 0; tool < tool_name_list.size(); tool++) {
-				double sample_fusion_level_tmp;
-				if (tool_type_list[tool] < 1)
-					sample_fusion_level_tmp = conventional_count_fusion (sampling_del_list, TAD_mat_list[tool][chr - 1], tmp, false);
-				else 
-					sample_fusion_level_tmp = conventional_count_fusion (sampling_del_list, TAD_boundary_mat_list[tool][chr - 1], tmp, false);
-				other_permutation_fusion_dist_matrix[tool][chr - 1].add_value(sample_fusion_level_tmp);
-				// total
-				other_total_permutation_fusion_level[tool][sample] += sample_fusion_level_tmp;
-			}
-			ValueMatrix mat_tmp;
-			ValueList sample_fusion_level_list_tmp = estimate_fusion_level(hi_c_mat, hi_c_data_model_list, sampling_del_list, RESOLUTION, window_size, contact_threshold_list, mat_tmp);
-			for (int t = 0; t < contact_threshold_list.size(); t++) {
-				our_permutation_fusion_level_dist_matrix[chr - 1][t].add_value(sample_fusion_level_list_tmp[t]);
-				// total
-				our_total_permutation_fusion_level[sample][t] += sample_fusion_level_list_tmp[t];
-			}
-			for (int t = 0; t < fusion_threshold_list.size(); t++) {
-				int our_permutation_fusion_count_tmp = 0;
-				for (int del = 0; del < mat_tmp[final_contact_threshold_index].size(); del++)
-					if (mat_tmp[final_contact_threshold_index][del] >= fusion_threshold_list[t])
-						our_permutation_fusion_count_tmp++;
-				our_permutation_fusion_count_dist_matrix[chr - 1][t].add_value(our_permutation_fusion_count_tmp);
-				// total
-				our_total_permutation_fusion_count[sample][t] += our_permutation_fusion_count_tmp;
-			}
-		}
-	}
-
-	ValueMatrix CTCF_del_matrix(CHR_NUM);
-	ValueList CTCF_del_num_list(CHR_NUM, 0);
-	ValueList fusion_count_list(tool_name_list.size(), 0);
-	//ValueList our_fusion_count_list(contact_threshold_list.size(), 0);
-	DeletionInfoList del_info_list;
-	ValueMatrix our_all_fusion_level_matrix(contact_threshold_list.size());
-	double LOOCV_cut_off = 0.7;
-	// Write the prediction of all tools	
-	string filename_tmp = "Debug/" + exp_name + "_fusion_summary.dat";
-	ofstream out_observation_fusion_summary_file(filename_tmp.c_str());
-	out_observation_fusion_summary_file << "chr\tdel_left\tdel_right\tCTCF";
-	for (int tool = 0; tool < tool_name_list.size(); tool++)
-		out_observation_fusion_summary_file << "\t" << tool_name_list[tool];
-	for (int t = 0; t < contact_threshold_list.size(); t++)
-		out_observation_fusion_summary_file << "\t" << "New (" << contact_threshold_list[t] << ")";
-	out_observation_fusion_summary_file << endl;
-	for (int chr = chr_min; chr <= chr_max; chr++) {
-		string chr_name = ((chr < 23)? num_to_string(chr):"X");
-		resize_and_fill(CTCF_del_matrix[chr - 1], del_mat[chr - 1].size(), 0);
-		for (int del = 0; del < del_mat[chr - 1].size(); del++) {
-			for (int ctcf = 0; ctcf < CTCF_mat[chr - 1].size(); ctcf++)
-				if (CTCF_mat[chr - 1][ctcf].left >= del_mat[chr - 1][del].left && CTCF_mat[chr - 1][ctcf].right <= del_mat[chr - 1][del].right) {
-					CTCF_del_matrix[chr - 1][del]++;					
-				}
-			CTCF_del_num_list[chr - 1] += CTCF_del_matrix[chr - 1][del];
-			out_observation_fusion_summary_file << chr_name << "\t" << del_mat[chr - 1][del].left << "\t" << del_mat[chr - 1][del].right << "\t" << CTCF_del_matrix[chr - 1][del];
-			for (int tool = 0; tool < tool_name_list.size(); tool++) {
-				out_observation_fusion_summary_file << "\t" << other_observation_fusion_level_matrix_list[chr - 1][tool][del];
-				if (other_observation_fusion_level_matrix_list[chr - 1][tool][del] >= LOOCV_cut_off)
-					fusion_count_list[tool]++;
-			}
-			for (int t = 0; t < contact_threshold_list.size(); t++) {
-				out_observation_fusion_summary_file << "\t" << our_observation_fusion_level_matrix_list[chr - 1][t][del];
-				//if (our_One_KG_fusion_level_matrix_list[chr - 1][t][del] >= LOOCV_cut_off)
-				//	our_fusion_count_list[t]++;
-				our_all_fusion_level_matrix[t].push_back(our_observation_fusion_level_matrix_list[chr - 1][t][del]);
-			}
-			out_observation_fusion_summary_file << endl;
-			// prepare for LOOCV
-			del_info_list.push_back(DeletionInfo(chr, del));
-		}
-	}
-	out_observation_fusion_summary_file.close();
-
-	// LOOCV
-	ValueList rank_tmp;
-	ValueMatrix sorted_index_mat (contact_threshold_list.size());
-	for (int t = 0; t < contact_threshold_list.size(); t++)
-		sort_by_value (our_all_fusion_level_matrix[t], sorted_index_mat[t], rank_tmp, false);
-	//ValueList concensus_fusion_num(tool_name_list.size(), 0), 
-	//	other_CTCF_fusion(tool_name_list.size(), 0), our_CTCF_fusion(tool_name_list.size(), 0), 
-	//	other_tp(tool_name_list.size(), 0), our_tp(tool_name_list.size(), 0);
-	filename_tmp = "Debug/" + exp_name + "_LOOCV.dat";
-	ofstream loocv_file(filename_tmp.c_str());
-	loocv_file << "#Tool\tConcensus\t#fusion\tCTCF_del\tCTCF_tot\tAgree";
-	for (int t = 0; t < contact_threshold_list.size(); t++)
-		loocv_file << "\tCTCF_del(" << contact_threshold_list[t] << ")\tCTCF_tot(" << contact_threshold_list[t] << ")\tAgree(" << contact_threshold_list[t] << ")";
-	loocv_file << endl;
-	for (int tool = 0; tool < tool_name_list.size(); tool++) {
-		int concensus_fusion_num = 0, other_CTCF_fusion_del = 0, other_CTCF_fusion_total = 0, other_tp = 0;
-		ValueMatrix concensus_fusion_matrix(CHR_NUM);
-		for (int chr = chr_min; chr <= chr_max; chr++)
-			resize_and_fill(concensus_fusion_matrix[chr - 1], del_mat[chr - 1].size(), 0);
-		for (int chr = chr_min; chr <= chr_max; chr++) {
-			for (int del = 0; del < del_mat[chr - 1].size(); del++) {
-				for (int another_tool = 0; another_tool < tool_name_list.size(); another_tool++) {
-					if (another_tool != tool)
-						concensus_fusion_matrix[chr - 1][del] += other_observation_fusion_level_matrix_list[chr - 1][another_tool][del];
-				}
-				if (concensus_fusion_matrix[chr - 1][del] >= 1 + LOOCV_cut_off) {
-					concensus_fusion_num++;
-					if (other_observation_fusion_level_matrix_list[chr - 1][tool][del] >= LOOCV_cut_off)
-						other_tp++;				
-				}
-				if (other_observation_fusion_level_matrix_list[chr - 1][tool][del] >= LOOCV_cut_off) {
-					if (CTCF_del_matrix[chr - 1][del] > 0)
-						other_CTCF_fusion_del++;
-					other_CTCF_fusion_total += CTCF_del_matrix[chr - 1][del];
-				}
-			}
-		}
-		loocv_file << tool_name_list[tool] << "\t" << concensus_fusion_num << "\t" << fusion_count_list[tool] << "\t"
-			<< other_CTCF_fusion_del << "\t" << other_CTCF_fusion_total << "\t" << other_tp;
-		for (int t = 0; t < contact_threshold_list.size(); t++) {
-			// Find the comparable fusion list from our tool
-			int our_tp = 0, our_CTCF_fusion_del = 0, our_CTCF_fusion_total = 0;
-			ValueMatrix our_fusion_matrix(CHR_NUM);
-			for (int chr = chr_min; chr <= chr_max; chr++) 				
-				resize_and_fill(our_fusion_matrix[chr - 1], del_mat[chr - 1].size(), 0);
-			for (int k = 0; k < fusion_count_list[tool]; k++) 
-				our_fusion_matrix[del_info_list[round(sorted_index_mat[t][k])].chr - 1][del_info_list[round(sorted_index_mat[t][k])].del] = 1;
-			for (int chr = chr_min; chr <= chr_max; chr++) {
-				for (int del = 0; del < del_mat[chr - 1].size(); del++) {
-					if (our_fusion_matrix[chr - 1][del] >= LOOCV_cut_off) {
-						if (concensus_fusion_matrix[chr - 1][del] >= 1 + LOOCV_cut_off) 
-							our_tp++;
-						if (CTCF_del_matrix[chr - 1][del] > 0)
-							our_CTCF_fusion_del++;
-						our_CTCF_fusion_total += CTCF_del_matrix[chr - 1][del];
-					}
-				}
-			}
-		 	loocv_file << "\t" << our_CTCF_fusion_del << "\t" << our_CTCF_fusion_total << "\t" << our_tp;
-		}
-		loocv_file << endl;
-	}
-	// p-value
-	filename_tmp = "Debug/" + exp_name + "_p_value.dat";
-	ofstream p_value_file(filename_tmp.c_str());
-	for (int tool = 0; tool < tool_name_list.size(); tool++) {
-		DistributionSummary tmp;
-		for (int sample = 0; sample < sample_num; sample++)
-			tmp.add_value(other_total_permutation_fusion_level[tool][sample]);
-		p_value_file << tool_name_list[tool] << "\t" << other_total_observation_fusion_level[tool] << "\t"
-			<< round(tmp.mean*100)/100 << " +/- " << round(tmp.std*100)/100 << "\t"  
-			<< ((tmp.std > 0)? round(100*(other_total_observation_fusion_level[tool] - tmp.mean)/tmp.std)/100 : 0) << endl;
-	}
-	for (int t = 0; t < contact_threshold_list.size(); t++) {
-		DistributionSummary tmp;
-		for (int sample = 0; sample < sample_num; sample++)
-			tmp.add_value(our_total_permutation_fusion_level[sample][t]);
-		p_value_file << "Threshold = " << contact_threshold_list[t] << "\t" << our_total_observation_fusion_level[t] << "\t"
-			<< round(tmp.mean) << " +/- " << round(tmp.std) << "\t"  
-			<< ((tmp.std > 0)? round(100*(our_total_observation_fusion_level[t] - tmp.mean)/tmp.std)/100 : 0) << endl;
-	}
-	for (int t = 0; t < fusion_threshold_list.size(); t++) {
-		DistributionSummary tmp;
-		for (int sample = 0; sample < sample_num; sample++)
-			tmp.add_value(our_total_permutation_fusion_count[sample][t]);
-		p_value_file << "Threshold = " << fusion_threshold_list[t] << "\t" << our_total_observation_fusion_count[t] << "\t"
-			<< round(tmp.mean) << " +/- " << round(tmp.std) << "\t"  
-			<< ((tmp.std > 0)? round(100*(our_total_observation_fusion_count[t] - tmp.mean)/tmp.std)/100 : 0) << endl;	
-	}
-	p_value_file.close();
-	// print the distribution
-	filename_tmp = "Debug/" + exp_name + "_distribution.dat";
-	ofstream dist_file(filename_tmp.c_str());
-	dist_file << "#";
-	for (int sample = -1; sample < sample_num; sample++) {
-		for (int tool = 0; tool < tool_name_list.size(); tool++) {
-			if (tool > 0)
-				dist_file << "\t";
-			if (sample < 0)
-				dist_file << tool_name_list[tool];
-			else
-				dist_file << other_total_permutation_fusion_level[tool][sample];
-		}
-		for (int t = 0; t < contact_threshold_list.size(); t++) {
-			if (sample < 0) 
-				dist_file << "\t" << "Threshold = " << contact_threshold_list[t];
-			else
-				dist_file << "\t" << our_total_permutation_fusion_level[sample][t];
-		}
-		for (int t = 0; t < fusion_threshold_list.size(); t++) {
-			if (sample < 0)
-				dist_file << "\t" << "Threshold = " << fusion_threshold_list[t];
-			else
-				dist_file << "\t" << our_total_permutation_fusion_count[sample][t];
-		}
-		dist_file << endl;
-	}
-	dist_file.close();
+double max(double a, double b) {
+	return (a > b)? a:b;
 }
 
-void final_prediction_experiment() {
-	IdList window_size_list = {25, 50, 100, 200, 400};
-	prediction_experiment(21, 1, 100000, window_size_list, false);
+double min(double a, double b) {
+        return (a < b)? a:b;
 }
 
-void final_prediction_plot() {
-	IdList window_size_list = {25, 50, 100};
-	prediction_experiment(21, 4200, 4200, window_size_list, true);
+void resize_and_fill(ValueList& x, int n, int a) {
+	if (x.size() != n)
+		x.resize(n);
+	for (int i = 0; i < n; i++)
+		x[i] = a;
 }
 
-void final_1KG_fusion_experiment(int sample_num) {
-	ValueList contact_threshold_list;
-	for (int i = 5; i <= 15; i++)
-		contact_threshold_list.push_back(i);
-	ValueList fusion_threshold_list;
-	for (int i = 350; i <= 750; i = i + 50)
-		fusion_threshold_list.push_back(i);
-	string del_filename = "/share/hormozdiarilab/Data/ValidatedVariants/1000G_SV_Phase3/ALL.Del.Bed";
-	fusion_experiment("GM12878_1KG", del_filename, true, 2500000, contact_threshold_list, 2, fusion_threshold_list, sample_num);
-}
-
-void final_disease_fusion_experiment(int sample_num) {
-	ValueList contact_threshold_list;
-	for (int i = 5; i <= 15; i++)
-		contact_threshold_list.push_back(i);
-	ValueList fusion_threshold_list;
-	for (int i = 350; i <= 750; i = i + 50)
-		fusion_threshold_list.push_back(i);
-	string del_filename = "/share/hormozdiarilab/Data/ValidatedVariants/Disease/deletion_mutation.dat";
-	fusion_experiment("GM12878_disease", del_filename, false, 2500000, contact_threshold_list, 2, fusion_threshold_list, sample_num);
-}
-
-int main() {
-	//export_all_hi_c_model();
-	//final_prediction_experiment();
-	//final_prediction_plot();
-	final_1KG_fusion_experiment(10000);
-	//final_disease_fusion_experiment(100);
-	cout << "Complete" << endl;
-	return 1;
-}
