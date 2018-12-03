@@ -1,0 +1,9 @@
+CPP=g++
+
+CPP_FLAGS= -g -w -std=c++11 -c -m64 -I /share/hormozdiarilab/Tools/CPLEX/ibm/ILOG/CPLEX_Studio1263/cplex/include/ -mcmodel=medium
+CPP_FLAGS_Link= -std=c++11 -m64 -I /share/hormozdiarilab/Tools/CPLEX/ibm/ILOG/CPLEX_Studio1263/cplex/include/ -L /share/hormozdiarilab/Tools/CPLEX/ibm/ILOG/CPLEX_Studio1263/cplex/lib/x86-64_linux/static_pic/ -lcplex -lm -lpthread -mcmodel=medium
+
+fit_hic_model: fit_hic_model.o
+	$(CPP) -o fit_hic_model fit_hic_model.o $(CPP_FLAGS_Link)
+fit_hic_model.o: fit_hic_model.cpp
+	$(CPP) $(CPP_FLAGS) fit_hic_model.cpp
