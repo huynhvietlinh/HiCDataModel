@@ -2,7 +2,7 @@
 <br>
 1. Change the path to CPLEX lib
 <br>
-line in file make_tad_fusion
+Change the variable YOUR_CPLEX_DIR (lines 3,4 in file make_TAD_fusion) to the directory that you installed CPLEX
 <br>
 2. Compile the code
 <br>
